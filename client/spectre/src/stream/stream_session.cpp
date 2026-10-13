@@ -409,6 +409,9 @@ bool StreamSession::open_window() {
 
 	// A no-op on Wayland (SDL_HINT_APP_ID above is what matters there).
 	// kAppIconPng is assets/app-icon-128.png, embedded by CMakeLists.txt.
+	// SDL's PNG loader arrived in 3.4; Debian 13 ships 3.2 and goes without
+	// the icon.
+#if SDL_VERSION_ATLEAST(3, 4, 0)
 	SDL_IOStream *icon_io = SDL_IOFromConstMem(kAppIconPng, kAppIconPng_len);
 	if (icon_io) {
 		SDL_Surface *icon = SDL_LoadPNG_IO(icon_io, true);
@@ -417,6 +420,7 @@ bool StreamSession::open_window() {
 			SDL_DestroySurface(icon);
 		}
 	}
+#endif
 
 	if (!presenter_.init(window_, kDrmRenderNode)) {
 		SLOG_ERROR("spectre: VulkanPresenter::init failed");
