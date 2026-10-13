@@ -80,6 +80,7 @@ Summary:        Ghost host: remote desktop sessions over GDP
 Requires:       ghostauth%{?_isa} = %{version}-%{release}
 Requires:       openssl
 Requires:       hostname
+Requires(post): policycoreutils
 %{?systemd_requires}
 Recommends:     foot
 Recommends:     labwc
@@ -100,6 +101,8 @@ broker (package veild) is separate and optional.
 %package -n ghostauth
 Summary:        Ghost PAM helper
 Requires:       openssl
+Requires(post): policycoreutils-python-utils
+Requires(postun): policycoreutils-python-utils
 %{?systemd_requires}
 
 %description -n ghostauth
@@ -236,8 +239,19 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/wraith.desktop
 #   systemctl enable --now ghostauth.socket ghostseat.socket ghostd
 # What the scriptlets generate in /etc/ghost is not part of any package
 # and stays when the packages are removed.
+#
+# SELinux: the helpers in /usr/lib/ghost would be lib_t, which leaves
+# ghostauth and ghostseat in systemd's own domain, where pam_unix may not
+# run its password helper. Labelled bin_t they run as unconfined services,
+# like ghostd. ghostauth owns the rule, since a host and a Veil both have
+# it; ghostd relabels its own files in the directory.
 
 %post -n ghostauth
+if command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -a -t bin_t '%{_prefix}/lib/ghost(/.*)?' 2>/dev/null \
+        || semanage fcontext -m -t bin_t '%{_prefix}/lib/ghost(/.*)?' 2>/dev/null || :
+    restorecon -R %{_prefix}/lib/ghost 2>/dev/null || :
+fi
 # The key ghostauth mints its tickets with and ghostseat verifies them
 # (host/authticket). Generated once, root:ghostauth 0640; delete it and
 # reinstall to rotate.
@@ -257,7 +271,13 @@ fi
 %preun -n ghostauth
 %systemd_preun ghostauth.socket
 
+%postun -n ghostauth
+if [ $1 -eq 0 ] && command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -d '%{_prefix}/lib/ghost(/.*)?' 2>/dev/null || :
+fi
+
 %post -n ghostd
+restorecon -R %{_prefix}/lib/ghost 2>/dev/null || :
 %tmpfiles_create %{_tmpfilesdir}/ghost.conf
 # The host's identity (gdp-spec.md section 2.3): a self-signed certificate
 # ghostd's lobby presents and spectre pins on first use. Generated once and

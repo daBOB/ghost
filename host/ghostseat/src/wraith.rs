@@ -6,9 +6,11 @@
 // its unit in the user's systemd manager, and the logout a console login
 // asks for. Everything here runs as root, which `systemctl --user
 // --machine=<user>@` needs.
+use std::io::Read;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -294,10 +296,25 @@ async fn wait_for_inactive(username: &str, limit: Duration) -> bool {
     }
 }
 
+/// Runs `cmd`, with its stderr in the error when it fails. stderr is a
+/// socket pair, not a pipe: with systemd 259 `systemctl --machine=` hands
+/// its stderr to the system bus (it reaches the user manager through
+/// systemd-run), and under Fedora's SELinux policy dbus-broker drops a
+/// connection that passes it a service's pipe.
 fn run_command(cmd: &mut Command) -> Result<()> {
-    let output = cmd.output().with_context(|| format!("running {cmd:?}"))?;
-    if !output.status.success() {
-        bail!("{cmd:?} failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+    let (mut ours, theirs) = std::os::unix::net::UnixStream::pair().context("creating a socket pair for stderr")?;
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(OwnedFd::from(theirs));
+    let spawned = cmd.spawn();
+    // Drops the Command's copy of the write end, so the read below ends
+    // when the child's does.
+    cmd.stderr(Stdio::null());
+    let mut child = spawned.with_context(|| format!("running {cmd:?}"))?;
+    let mut stderr = Vec::new();
+    let read = ours.read_to_end(&mut stderr);
+    let status = child.wait().with_context(|| format!("waiting for {cmd:?}"))?;
+    read.with_context(|| format!("reading the output of {cmd:?}"))?;
+    if !status.success() {
+        bail!("{cmd:?} failed: {}", String::from_utf8_lossy(&stderr).trim());
     }
     Ok(())
 }
