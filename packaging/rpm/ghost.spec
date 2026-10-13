@@ -40,6 +40,7 @@ BuildRequires:  git-core
 BuildRequires:  cargo
 BuildRequires:  rust
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  firewalld-filesystem
 BuildRequires:  desktop-file-utils
 BuildRequires:  protobuf-compiler
 BuildRequires:  protobuf-devel
@@ -80,6 +81,7 @@ Summary:        Ghost host: remote desktop sessions over GDP
 Requires:       ghostauth%{?_isa} = %{version}-%{release}
 Requires:       openssl
 Requires:       hostname
+Requires:       firewalld-filesystem
 Requires(post): policycoreutils
 %{?systemd_requires}
 Recommends:     foot
@@ -116,6 +118,7 @@ Summary:        Veil: the Ghost broker and web UI
 Requires:       ghostauth%{?_isa} = %{version}-%{release}
 Requires:       openssl
 Requires:       hostname
+Requires:       firewalld-filesystem
 %{?systemd_requires}
 
 %description -n veild
@@ -226,6 +229,12 @@ chmod 0644 %{buildroot}%{_unitdir}/veild.service %{buildroot}%{_sysconfdir}/pam.
 install -D -m 0644 debian/veild.sysusers %{buildroot}%{_sysusersdir}/veild.conf
 install -d -m 0700 %{buildroot}%{_sharedstatedir}/veil
 
+# firewalld service definitions for the default ports. Nothing is opened
+# by installing them: firewall-cmd --permanent --add-service=ghostd (or
+# veild), then --reload.
+install -D -m 0644 -t %{buildroot}%{_prefix}/lib/firewalld/services \
+    packaging/system/firewalld/ghostd.xml packaging/system/firewalld/veild.xml
+
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/spectre-qt.desktop
 desktop-file-validate %{buildroot}%{_datadir}/applications/wraith.desktop
@@ -305,6 +314,7 @@ else
     fi
 fi
 %systemd_post ghostd.service ghostseat.socket
+%firewalld_reload
 
 %preun -n ghostd
 %systemd_preun ghostd.service ghostseat.socket
@@ -379,6 +389,7 @@ if [ ! -e "$f" ]; then
     fi
 fi
 %systemd_post veild.service
+%firewalld_reload
 
 %preun -n veild
 %systemd_preun veild.service
@@ -407,6 +418,7 @@ fi
 %{_sysusersdir}/ghostd.conf
 %{_tmpfilesdir}/ghost.conf
 %{_udevrulesdir}/72-ghost-input.rules
+%{_prefix}/lib/firewalld/services/ghostd.xml
 %{_datadir}/polkit-1/rules.d/49-ghost-sessions.rules
 %{_datadir}/applications/wraith.desktop
 %{_datadir}/ghost/
@@ -431,6 +443,7 @@ fi
 %{_bindir}/veild
 %{_unitdir}/veild.service
 %{_sysusersdir}/veild.conf
+%{_prefix}/lib/firewalld/services/veild.xml
 %dir %attr(0700,veil,veil) %{_sharedstatedir}/veil
 
 %files -n spectre
