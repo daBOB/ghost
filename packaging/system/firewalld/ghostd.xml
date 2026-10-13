@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+SPDX-License-Identifier: GPL-3.0-only
+
+firewalld service for a Ghost host, at ghostd.toml's defaults: the lobby
+([lobby] port) and one port per session ([sessions] port_base and max).
+A host with other ports copies this to /etc/firewalld/services and edits
+it there. Installing it opens nothing: add the service "ghostd" to a zone.
+-->
+<service>
+  <short>Ghost host</short>
+  <description>Ghost remote desktop host: ghostd's lobby, which spectre connects to first, and one UDP port per running session.</description>
+  <port protocol="udp" port="4442"/>
+  <port protocol="udp" port="14400-14463"/>
+</service>

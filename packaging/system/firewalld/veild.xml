@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+SPDX-License-Identifier: GPL-3.0-only
+
+firewalld service for Veil, at veild.toml's defaults: the lobby ([lobby]
+port), which also carries joined hosts and gateway sessions, and the web
+UI ([web] listen), HTTPS over TCP and the browser client's WebTransport
+over UDP. A Veil with other ports copies this to /etc/firewalld/services
+and edits it there. Installing it opens nothing: add the service "veild"
+to a zone.
+-->
+<service>
+  <short>Veil</short>
+  <description>Veil, the Ghost broker: its lobby for spectre logins, joined hosts and gateway sessions, and its web UI and browser client.</description>
+  <port protocol="udp" port="4442"/>
+  <port protocol="tcp" port="443"/>
+  <port protocol="udp" port="443"/>
+</service>
