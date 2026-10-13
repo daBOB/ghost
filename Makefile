@@ -30,7 +30,7 @@ GHOST_CERT_DIR      ?= /etc/ghost
 # See packaging/system/pam-render.sh.
 PAM_STACK           ?= auto
 
-.PHONY: all build configure reconfigure test clean distclean debug install uninstall reload cert config authkey accounts install-veil uninstall-veil deb
+.PHONY: all build configure reconfigure test clean distclean debug install uninstall reload cert config authkey accounts install-veil uninstall-veil deb rpm
 
 all: build
 
@@ -392,6 +392,25 @@ deb:
 	done; \
 	echo "-- packages in target/:"; ls target
 
+# The RPM packages (ghostd, ghostauth, veild, spectre, libgdp-devel,
+# pyrowave-libs), for Fedora: `rpmbuild -bb` on packaging/rpm/ghost.spec,
+# binary packages only, unsigned, from a tarball of the working tree's
+# tracked files, with the version from CMakeLists.txt. Builds under
+# build-rpm, not $(BUILD_DIR), and moves the packages into ./target. Needs
+# rpm-build, the BuildRequires in the spec (`dnf builddep
+# packaging/rpm/ghost.spec`) and the network.
+RPM_TOPDIR = $(CURDIR)/build-rpm
+rpm:
+	@set -e; \
+	version=$$(sed -n 's/^project(ghost VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt); \
+	rm -rf $(RPM_TOPDIR)/RPMS; \
+	mkdir -p $(RPM_TOPDIR)/SOURCES target; \
+	git ls-files -z | tar --null --files-from=- --ignore-failed-read \
+		--transform "flags=r;s,^,ghost-$$version/," -czf $(RPM_TOPDIR)/SOURCES/ghost-$$version.tar.gz; \
+	rpmbuild -bb packaging/rpm/ghost.spec --define "_topdir $(RPM_TOPDIR)" --define "ghost_version $$version"; \
+	mv -f $(RPM_TOPDIR)/RPMS/*/*.rpm target/; \
+	echo "-- packages in target/:"; ls target
+
 test: build
 	cd $(BUILD_DIR) && ctest --output-on-failure
 
@@ -399,11 +418,12 @@ clean:
 	if [ -f $(BUILD_DIR)/CMakeCache.txt ]; then $(CMAKE) --build $(BUILD_DIR) --target clean; fi
 	if [ -d host/target ]; then cd host && cargo clean; fi
 
-# Also the `make deb` output (target/), dpkg-buildpackage's working files
+# Also the `make deb` and `make rpm` output (target/), rpmbuild's tree
+# (build-rpm), dpkg-buildpackage's working files
 # under debian/ (the same set .gitignore lists; no tracked file is among them)
 # and the Wisp rootfs output (client/wisp's clean).
 distclean:
-	rm -rf $(BUILD_DIR) build-debug build-release build-asan host/target client/spectre-qt/build client/spectre-qt/.qtcreator
+	rm -rf $(BUILD_DIR) build-debug build-release build-asan build-rpm host/target client/spectre-qt/build client/spectre-qt/.qtcreator
 	rm -rf target debian/_build debian/_pyrowave debian/tmp debian/.debhelper debian/debhelper-build-stamp \
 		debian/files debian/*.substvars debian/*.debhelper.log debian/*.debhelper debian/veild.service debian/veild.pam \
 		debian/ghostd debian/veild debian/spectre debian/libgdp-dev debian/libpyrowave-shared0
