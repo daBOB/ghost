@@ -42,11 +42,15 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
+      # nodejs is for the JavaScript actions (actions/checkout): Gitea's
+      # act_runner runs them with the container's own node, where GitHub's
+      # runner brings one along.
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential clang libclang-rt-dev cmake ninja-build pkg-config git curl ca-certificates \
+            nodejs \
             protobuf-compiler libprotobuf-dev libssl-dev openssl \
             libngtcp2-dev libngtcp2-crypto-ossl-dev \
             wayland-protocols libwayland-dev libxkbcommon-dev \
