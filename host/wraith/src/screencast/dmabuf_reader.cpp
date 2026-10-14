@@ -13,10 +13,14 @@
 #include <libdrm/drm_fourcc.h>
 #include <linux/dma-buf.h>
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <xf86drm.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -187,6 +191,7 @@ bool has_extension(const char *list, const char *name) {
 } // namespace
 
 struct DmabufReader::Impl {
+	int drm_fd = -1; // ours: see open()
 	struct gbm_device *gbm = nullptr;
 	EGLDisplay display = EGL_NO_DISPLAY;
 	EGLContext context = EGL_NO_CONTEXT;
@@ -441,6 +446,9 @@ DmabufReader::~DmabufReader() {
 	if (impl_->gbm) {
 		gbm_device_destroy(impl_->gbm);
 	}
+	if (impl_->drm_fd >= 0) {
+		::close(impl_->drm_fd);
+	}
 }
 
 bool DmabufReader::is_open() const {
@@ -458,7 +466,30 @@ bool DmabufReader::open(int drm_fd) {
 		WLOG_INFO("dmabuf_reader: EGL has no GBM platform");
 		return false;
 	}
-	s.gbm = gbm_create_device(drm_fd);
+	// A DRM file of our own rather than the caller's, which the VA-API
+	// encoder uses too. GEM handles belong to the file, and a dmabuf
+	// imported twice on one file comes back as the same handle, so two
+	// drivers that keep separate handle tables mustn't share it. On Intel
+	// they do -- iHD for VA-API, iris for this GL -- and both import every
+	// capture buffer of a refined session; sharing the file left the tile
+	// shaders reading blank buffers (ADL-N, iHD 26.1, Mesa 26.0): the whole
+	// picture went black under the lossless layer, and once wraith aborted
+	// inside iris. A dup() would share the file; opening the node again
+	// doesn't. (radeonsi's VA-API and GL are one driver with one handle
+	// table per file, which is why AMD never showed it.)
+	char *node = drmGetRenderDeviceNameFromFd(drm_fd);
+	if (!node) {
+		WLOG_ERROR("dmabuf_reader: no render node behind the encoder's DRM fd");
+		return false;
+	}
+	s.drm_fd = ::open(node, O_RDWR | O_CLOEXEC);
+	if (s.drm_fd < 0) {
+		WLOG_ERROR("dmabuf_reader: can't open %s: %s", node, strerror(errno));
+		free(node);
+		return false;
+	}
+	free(node);
+	s.gbm = gbm_create_device(s.drm_fd);
 	if (!s.gbm) {
 		WLOG_ERROR("dmabuf_reader: gbm_create_device failed");
 		return false;

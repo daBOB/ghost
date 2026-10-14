@@ -14,7 +14,8 @@
 // a single reference, IDR every EncoderConfig::gop_size frames or on
 // request. Only the block sizes are queried from the driver
 // (VAConfigAttribEncHEVCBlockSizes), because HEVC hardware genuinely
-// differs there -- radeonsi, for instance, supports exactly one CTB size.
+// differs there -- radeonsi, for instance, supports exactly one CTB size --
+// and whether it takes P slices at all (see p_as_gpb_).
 #pragma once
 
 #include "encode/vaapi/vaapi_encoder_base.hpp"
@@ -46,19 +47,38 @@ private:
 	// block sizes inside what it allows, falling back to the spec's
 	// smallest-legal set if the driver doesn't answer.
 	void query_block_sizes();
+	// Reads VAConfigAttribPredictionDirection into p_as_gpb_.
+	void query_prediction_direction();
+	// Reads VAConfigAttribEncHEVCFeatures into the *_enabled_ flags below.
+	void query_features();
 
 	uint8_t level_idc_ = 120;
 	uint8_t log2_min_cb_minus3_ = 0;
 	uint8_t log2_diff_max_min_cb_ = 3;
 	uint8_t log2_min_tb_minus2_ = 0;
 	uint8_t log2_diff_max_min_tb_ = 3;
-	uint8_t max_transform_hierarchy_depth_ = 3;
+	uint8_t max_transform_hierarchy_depth_inter_ = 3;
+	uint8_t max_transform_hierarchy_depth_intra_ = 3;
+	// The SPS coding tools, each on unless the driver says it can't do it
+	// (VAConfigAttribEncHEVCFeatures). These change how the decoder parses
+	// or reconstructs a picture, so the SPS has to state what the hardware
+	// really does: iHD has no strong intra smoothing, for one, and
+	// announcing it anyway makes every intra prediction drift.
+	bool amp_enabled_ = true;
+	bool sao_enabled_ = true;
+	bool strong_intra_smoothing_enabled_ = true;
 	// MaxPicOrderCntLsb = 2^(this + 4) = 256. poc_ wraps at it inside a
 	// longer GOP, which is legal: the slice header carries only the LSBs
 	// and a relative reference (delta -1), and decoders rebuild the full
 	// POC themselves. radeonsi encodes across the wrap correctly.
 	uint8_t log2_max_poc_lsb_minus4_ = 4;
 	uint32_t ctb_size_ = 64;
+	// Code each P picture as a generalised-P/B (GPB) one instead: a B slice
+	// whose two reference lists both hold the previous picture, so it
+	// predicts from exactly what a P slice would. Set when the driver
+	// reports VA_PREDICTION_DIRECTION_BI_NOT_EMPTY, as iHD's low-power HEVC
+	// encoder does: it has no P slices. Any HEVC Main decoder takes these.
+	bool p_as_gpb_ = false;
 
 	std::vector<uint8_t> vps_nal_;
 	std::vector<uint8_t> sps_nal_;

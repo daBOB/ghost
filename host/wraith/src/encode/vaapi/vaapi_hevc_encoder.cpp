@@ -8,6 +8,7 @@
 
 #include <va/va_enc_hevc.h>
 
+#include <algorithm>
 #include <iterator>
 
 namespace wraith {
@@ -65,7 +66,7 @@ VAProfile VaapiHevcEncoder::enc_profile() const {
 void VaapiHevcEncoder::query_block_sizes() {
 	VAConfigAttrib attrib = {};
 	attrib.type = VAConfigAttribEncHEVCBlockSizes;
-	VAStatus st = vaGetConfigAttributes(display_, enc_profile(), VAEntrypointEncSlice, &attrib, 1);
+	VAStatus st = vaGetConfigAttributes(display_, enc_profile(), enc_entrypoint_, &attrib, 1);
 	if (st != VA_STATUS_SUCCESS || attrib.value == VA_ATTRIB_NOT_SUPPORTED) {
 		WLOG_INFO("vaapi_encoder: HEVC block sizes not advertised, using 8..64 CTB / 4..32 TB");
 		return;
@@ -91,17 +92,67 @@ void VaapiHevcEncoder::query_block_sizes() {
 	log2_min_tb_minus2_ = (uint8_t)(log2_min_tb - 2);
 	log2_diff_max_min_tb_ = (uint8_t)(log2_max_tb - log2_min_tb);
 	ctb_size_ = 1u << log2_max_ctb;
-	// The transform tree can't be deeper than the CTB-to-smallest-TB gap.
-	max_transform_hierarchy_depth_ = (uint8_t)(log2_max_ctb - log2_min_tb);
-	if (max_transform_hierarchy_depth_ > 3) {
-		max_transform_hierarchy_depth_ = 3;
+	// The transform tree can't be deeper than the CTB-to-smallest-TB gap,
+	// nor than the driver's own limit: it is a parsing parameter, not just
+	// a ceiling -- at the SPS's maximum depth split_transform_flag is
+	// inferred rather than coded, so announcing more depth than the
+	// hardware uses makes the decoder read a flag that isn't there. iHD
+	// allows 2, and with 3 here every picture was garbage from its first
+	// CTB.
+	uint32_t depth = std::min(log2_max_ctb - log2_min_tb, 3u);
+	auto clamp_depth = [depth](uint32_t lo, uint32_t hi) {
+		return (uint8_t)std::max(lo, std::min(depth, hi));
+	};
+	max_transform_hierarchy_depth_inter_ = clamp_depth(sizes.bits.min_max_transform_hierarchy_depth_inter,
+		sizes.bits.max_max_transform_hierarchy_depth_inter);
+	max_transform_hierarchy_depth_intra_ = clamp_depth(sizes.bits.min_max_transform_hierarchy_depth_intra,
+		sizes.bits.max_max_transform_hierarchy_depth_intra);
+	WLOG_INFO("vaapi_encoder: HEVC blocks: CTB %u, min CB %u, TB %u..%u, transform depth %u inter / %u intra",
+		ctb_size_, 1u << log2_min_cb, 1u << log2_min_tb, 1u << log2_max_tb,
+		max_transform_hierarchy_depth_inter_, max_transform_hierarchy_depth_intra_);
+}
+
+void VaapiHevcEncoder::query_features() {
+	VAConfigAttrib attrib = {};
+	attrib.type = VAConfigAttribEncHEVCFeatures;
+	VAStatus st = vaGetConfigAttributes(display_, enc_profile(), enc_entrypoint_, &attrib, 1);
+	if (st != VA_STATUS_SUCCESS || attrib.value == VA_ATTRIB_NOT_SUPPORTED) {
+		return;
 	}
-	WLOG_INFO("vaapi_encoder: HEVC blocks: CTB %u, min CB %u, TB %u..%u, transform depth %u", ctb_size_,
-		1u << log2_min_cb, 1u << log2_min_tb, 1u << log2_max_tb, max_transform_hierarchy_depth_);
+	VAConfigAttribValEncHEVCFeatures features;
+	features.value = attrib.value;
+	amp_enabled_ = features.bits.amp != VA_FEATURE_NOT_SUPPORTED;
+	sao_enabled_ = features.bits.sao != VA_FEATURE_NOT_SUPPORTED;
+	strong_intra_smoothing_enabled_ = features.bits.strong_intra_smoothing != VA_FEATURE_NOT_SUPPORTED;
+	// The PPS fixes these, so a driver that insists otherwise can't be
+	// served; say so rather than stream something undecodable silently.
+	if (features.bits.cu_qp_delta == VA_FEATURE_NOT_SUPPORTED ||
+		features.bits.transform_skip == VA_FEATURE_REQUIRED ||
+		features.bits.sign_data_hiding == VA_FEATURE_REQUIRED ||
+		features.bits.temporal_mvp == VA_FEATURE_REQUIRED) {
+		WLOG_ERROR("vaapi_encoder: driver's HEVC features (0x%x) conflict with the PPS this encoder writes",
+			attrib.value);
+	}
+	WLOG_INFO("vaapi_encoder: HEVC tools: AMP %s, SAO %s, strong intra smoothing %s",
+		amp_enabled_ ? "on" : "off", sao_enabled_ ? "on" : "off",
+		strong_intra_smoothing_enabled_ ? "on" : "off");
+}
+
+void VaapiHevcEncoder::query_prediction_direction() {
+	VAConfigAttrib attrib = {};
+	attrib.type = VAConfigAttribPredictionDirection;
+	VAStatus st = vaGetConfigAttributes(display_, enc_profile(), enc_entrypoint_, &attrib, 1);
+	p_as_gpb_ = st == VA_STATUS_SUCCESS && attrib.value != VA_ATTRIB_NOT_SUPPORTED &&
+		(attrib.value & VA_PREDICTION_DIRECTION_BI_NOT_EMPTY) != 0;
+	if (p_as_gpb_) {
+		WLOG_INFO("vaapi_encoder: driver has no HEVC P slices, coding them as generalised-P B slices");
+	}
 }
 
 bool VaapiHevcEncoder::init_codec() {
 	query_block_sizes();
+	query_features();
+	query_prediction_direction();
 
 	// surface_alignment() pads to 64, the largest CTB the spec allows, so
 	// this holds for any driver; it is checked rather than assumed because
@@ -127,22 +178,22 @@ bool VaapiHevcEncoder::init_codec() {
 	sps_params.log2_diff_max_min_luma_coding_block_size = log2_diff_max_min_cb_;
 	sps_params.log2_min_transform_block_size_minus2 = log2_min_tb_minus2_;
 	sps_params.log2_diff_max_min_transform_block_size = log2_diff_max_min_tb_;
-	sps_params.max_transform_hierarchy_depth_inter = max_transform_hierarchy_depth_;
-	sps_params.max_transform_hierarchy_depth_intra = max_transform_hierarchy_depth_;
+	sps_params.max_transform_hierarchy_depth_inter = max_transform_hierarchy_depth_inter_;
+	sps_params.max_transform_hierarchy_depth_intra = max_transform_hierarchy_depth_intra_;
 	sps_params.log2_max_pic_order_cnt_lsb_minus4 = log2_max_poc_lsb_minus4_;
-	sps_params.amp_enabled = true;
-	sps_params.sao_enabled = true;
+	sps_params.amp_enabled = amp_enabled_;
+	sps_params.sao_enabled = sao_enabled_;
 	// Off deliberately: temporal MV prediction would make every picture's
 	// motion vectors depend on the collocated picture's, which is one more
 	// thing to get wrong for a few percent of bitrate, and it needs the
 	// collocated reference plumbed through the picture parameters. The
 	// H.264 backend makes the same trade (no direct_8x8 temporal mode).
 	sps_params.temporal_mvp_enabled = false;
-	sps_params.strong_intra_smoothing_enabled = true;
+	sps_params.strong_intra_smoothing_enabled = strong_intra_smoothing_enabled_;
 
 	vps_nal_ = hevc::wrap_nal(hevc::kNalVps, hevc::escape_emulation(hevc::build_vps(level_idc_)));
 	sps_nal_ = hevc::wrap_nal(hevc::kNalSps, hevc::escape_emulation(hevc::build_sps(sps_params)));
-	pps_nal_ = hevc::wrap_nal(hevc::kNalPps, hevc::escape_emulation(hevc::build_pps()));
+	pps_nal_ = hevc::wrap_nal(hevc::kNalPps, hevc::escape_emulation(hevc::build_pps(log2_diff_max_min_cb_)));
 
 	poc_ = 0;
 	last_ref_poc_ = 0;
@@ -172,20 +223,21 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 		seq.seq_fields.bits.bit_depth_luma_minus8 = 0;
 		seq.seq_fields.bits.bit_depth_chroma_minus8 = 0;
 		seq.seq_fields.bits.scaling_list_enabled_flag = 0;
-		seq.seq_fields.bits.strong_intra_smoothing_enabled_flag = 1;
-		seq.seq_fields.bits.amp_enabled_flag = 1;
-		seq.seq_fields.bits.sample_adaptive_offset_enabled_flag = 1;
+		seq.seq_fields.bits.strong_intra_smoothing_enabled_flag = strong_intra_smoothing_enabled_;
+		seq.seq_fields.bits.amp_enabled_flag = amp_enabled_;
+		seq.seq_fields.bits.sample_adaptive_offset_enabled_flag = sao_enabled_;
 		seq.seq_fields.bits.pcm_enabled_flag = 0;
 		seq.seq_fields.bits.sps_temporal_mvp_enabled_flag = 0;
-		// No B-frames and one reference: every picture references only the
-		// one before it, which is exactly what "low delay" describes.
+		// No reordering and one reference: every picture references only
+		// the one before it (GPB B slices included), which is exactly what
+		// "low delay" describes.
 		seq.seq_fields.bits.low_delay_seq = 1;
 		seq.log2_min_luma_coding_block_size_minus3 = log2_min_cb_minus3_;
 		seq.log2_diff_max_min_luma_coding_block_size = log2_diff_max_min_cb_;
 		seq.log2_min_transform_block_size_minus2 = log2_min_tb_minus2_;
 		seq.log2_diff_max_min_transform_block_size = log2_diff_max_min_tb_;
-		seq.max_transform_hierarchy_depth_inter = max_transform_hierarchy_depth_;
-		seq.max_transform_hierarchy_depth_intra = max_transform_hierarchy_depth_;
+		seq.max_transform_hierarchy_depth_inter = max_transform_hierarchy_depth_inter_;
+		seq.max_transform_hierarchy_depth_intra = max_transform_hierarchy_depth_intra_;
 		seq.vui_parameters_present_flag = 0;
 		if (!add_buffer(buffers, VAEncSequenceParameterBufferType, sizeof(seq), &seq)) {
 			return false;
@@ -227,7 +279,9 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	if (!is_idr) {
 		pic.reference_frames[0].picture_id = last_ref_surface_;
 		pic.reference_frames[0].pic_order_cnt = last_ref_poc_;
-		pic.reference_frames[0].flags = 0;
+		// Where it sits in the RPS, as the slice's lists say too: the
+		// previous picture, before this one in output order.
+		pic.reference_frames[0].flags = VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE;
 	}
 	pic.coded_buf = coded_buf;
 	// 0xff = "none": sps_temporal_mvp_enabled_flag is 0, so no picture is
@@ -235,7 +289,12 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	pic.collocated_ref_pic_index = 0xff;
 	pic.last_picture = 0;
 	pic.pic_init_qp = 26;
-	pic.diff_cu_qp_delta_depth = 0;
+	// QP groups as small as the smallest coding block, as ffmpeg's
+	// hevc_vaapi sets them: iHD's low-power encoder (which requires
+	// cu_qp_delta) changes QP at that granularity whatever the PPS says,
+	// and with whole-CTB groups (0) the decoder applied the wrong QP to
+	// most blocks -- weak residuals that left older text ghosting through.
+	pic.diff_cu_qp_delta_depth = log2_diff_max_min_cb_;
 	pic.pps_cb_qp_offset = 0;
 	pic.pps_cr_qp_offset = 0;
 	pic.num_tile_columns_minus1 = 0;
@@ -246,7 +305,14 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	pic.slice_pic_parameter_set_id = 0;
 	pic.nal_unit_type = is_idr ? hevc::kNalIdrWRadl : hevc::kNalTrailR;
 	pic.pic_fields.bits.idr_pic_flag = is_idr ? 1 : 0;
-	pic.pic_fields.bits.coding_type = is_idr ? 1 : 2; // 1 = I, 2 = P
+	// H.265 §7.4.7.1 slice_type for this picture: 2 = I, 1 = P, 0 = B.
+	uint32_t slice_type = is_idr ? 2u : (p_as_gpb_ ? 0u : 1u);
+
+	// 1 = I, 2 = P. A GPB picture stays a P picture here, with only its
+	// slices B, as ffmpeg's hevc_vaapi sends it. With 3 (B) instead, iHD's
+	// low-power encoder (ADL-N) put out pictures with ghosts of older text
+	// blended in, where ffmpeg's encode of the same frames was clean.
+	pic.pic_fields.bits.coding_type = is_idr ? 1 : 2;
 	pic.pic_fields.bits.reference_pic_flag = 1;
 	pic.pic_fields.bits.cu_qp_delta_enabled_flag = 1; // matches the packed PPS
 	pic.pic_fields.bits.pps_loop_filter_across_slices_enabled_flag = 1;
@@ -262,10 +328,10 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	// them. See hevc_bitstream.hpp.
 	hevc::SliceHeaderParams slice_hdr_params{};
 	slice_hdr_params.is_idr = is_idr;
-	slice_hdr_params.slice_type = is_idr ? 2u : 1u;
+	slice_hdr_params.slice_type = slice_type;
 	slice_hdr_params.poc_lsb = poc_ % max_poc_lsb_;
 	slice_hdr_params.log2_max_pic_order_cnt_lsb_minus4 = log2_max_poc_lsb_minus4_;
-	slice_hdr_params.sao_enabled = true;
+	slice_hdr_params.sao_enabled = sao_enabled_;
 	std::vector<uint8_t> slice_nal = hevc::wrap_nal(is_idr ? hevc::kNalIdrWRadl : hevc::kNalTrailR,
 		hevc::escape_emulation(hevc::build_slice_header_prefix(slice_hdr_params)));
 	if (!add_packed_header(buffers, VAEncPackedHeaderSlice, slice_nal)) {
@@ -279,7 +345,7 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	VAEncSliceParameterBufferHEVC slice = {};
 	slice.slice_segment_address = 0;
 	slice.num_ctu_in_slice = ctbs;
-	slice.slice_type = is_idr ? 2 : 1; // H.265 §7.4.7.1: 2 = I, 1 = P, 0 = B
+	slice.slice_type = (uint8_t)slice_type;
 	slice.slice_pic_parameter_set_id = 0;
 	slice.num_ref_idx_l0_active_minus1 = 0;
 	slice.num_ref_idx_l1_active_minus1 = 0;
@@ -297,6 +363,11 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 		slice.ref_pic_list0[0].picture_id = last_ref_surface_;
 		slice.ref_pic_list0[0].pic_order_cnt = last_ref_poc_;
 		slice.ref_pic_list0[0].flags = VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE;
+		if (p_as_gpb_) {
+			// GPB: list 1 is list 0 again. num_ref_idx_l1_active_minus1
+			// is already 0, i.e. this one entry.
+			slice.ref_pic_list1[0] = slice.ref_pic_list0[0];
+		}
 	}
 	slice.max_num_merge_cand = 5;
 	slice.slice_qp_delta = 0;
@@ -306,8 +377,8 @@ bool VaapiHevcEncoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 	slice.slice_tc_offset_div2 = 0;
 	slice.slice_fields.bits.last_slice_of_pic_flag = 1;
 	slice.slice_fields.bits.num_ref_idx_active_override_flag = is_idr ? 0 : 1;
-	slice.slice_fields.bits.slice_sao_luma_flag = 1;
-	slice.slice_fields.bits.slice_sao_chroma_flag = 1;
+	slice.slice_fields.bits.slice_sao_luma_flag = sao_enabled_;
+	slice.slice_fields.bits.slice_sao_chroma_flag = sao_enabled_;
 	slice.slice_fields.bits.slice_loop_filter_across_slices_enabled_flag = 1;
 	slice.slice_fields.bits.collocated_from_l0_flag = 1;
 	if (!add_buffer(buffers, VAEncSliceParameterBufferType, sizeof(slice), &slice)) {

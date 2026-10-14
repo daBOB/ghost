@@ -63,6 +63,13 @@ public:
 	// entrypoint for it (hardware_encodable_codecs) without opening one.
 	virtual VAProfile enc_profile() const = 0;
 
+	// The encode entrypoint `display` offers for `profile`: EncSlice when
+	// there is one, else EncSliceLP (Intel's VDEnc), which is all iHD
+	// offers for H.264/HEVC on Alder Lake-N and for AV1 anywhere. False if
+	// it has neither. open() and hardware_encodable_codecs() both go
+	// through this, so they can't disagree.
+	static bool find_encode_entrypoint(VADisplay display, VAProfile profile, VAEntrypoint *out);
+
 protected:
 	// --- what a codec subclass supplies -------------------------------
 
@@ -128,9 +135,11 @@ protected:
 	// Appends one parameter buffer to `buffers`.
 	bool add_buffer(ParamBuffers &buffers, VABufferType type, unsigned size, const void *data);
 	// A packed header (start-code prefixed, emulation-escaped) plus the
-	// parameter buffer describing it.
-	bool add_packed_header(ParamBuffers &buffers, VAEncPackedHeaderType type,
-		const std::vector<uint8_t> &nal);
+	// parameter buffer describing it. `pad_bits` is how much zero padding
+	// the last byte carries that isn't part of the header (bit_length
+	// leaves it out).
+	bool add_packed_header(ParamBuffers &buffers, VAEncPackedHeaderType type, const std::vector<uint8_t> &nal,
+		unsigned pad_bits = 0);
 	// The rate-control and frame-rate misc buffers, each sent only when it
 	// has something new to say (set_bitrate() marks the first dirty; the
 	// second never changes after the first frame).
@@ -148,6 +157,9 @@ protected:
 
 	EncoderConfig config_;
 	VADisplay display_ = nullptr;
+	// What the encode config was created with (find_encode_entrypoint());
+	// set before init_codec(), which may ask it for config attributes.
+	VAEntrypoint enc_entrypoint_ = VAEntrypointEncSlice;
 	VAContextID enc_context_ = VA_INVALID_ID;
 
 	uint32_t padded_width_ = 0, padded_height_ = 0;

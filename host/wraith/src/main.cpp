@@ -75,6 +75,18 @@ static int run_check_config_mode(const char *path) {
 	return 0;
 }
 
+// -e's codec, from the dump file's extension.
+static const char *dump_codec_token(const char *path) {
+	const char *dot = strrchr(path, '.');
+	if (dot && (strcmp(dot, ".h265") == 0 || strcmp(dot, ".hevc") == 0)) {
+		return "h265";
+	}
+	if (dot && strcmp(dot, ".obu") == 0) {
+		return "av1";
+	}
+	return "h264";
+}
+
 static void usage(const char *argv0) {
 	printf("Usage: %s -p session-type [-d sessions-datadir] [-o WIDTHxHEIGHT]\n"
 		   "          [-G ghostd-control-socket | -l gdp-port -t token -c cert.pem -k key.pem]\n"
@@ -105,7 +117,9 @@ static void usage(const char *argv0) {
 		   "  -l   direct-connect mode: listen on a fixed port, authenticate\n"
 		   "       spectre with a static shared token (-t), present -c/-k. No\n"
 		   "       ghostd involved -- for local testing only.\n"
-		   "  -e   also append the encoded video to this file (Annex B).\n"
+		   "  -e   also append the encoded video to this file (Annex B). The\n"
+		   "       extension picks the codec: .h265/.hevc for H.265, .obu for\n"
+		   "       AV1, anything else H.264.\n"
 		   "  -b   bitrate ceiling in bits per second, overriding wraith.toml.\n"
 		   "  -F   force the software (x264) encoder fallback even when a\n"
 		   "       hardware encoder (VA-API or NVENC) works -- for testing the\n"
@@ -312,7 +326,8 @@ int main(int argc, char *argv[]) {
 	session.set_force_software_encoder(force_software_encoder || wraith::config().encode.force_software);
 
 	if (encode_path) {
-		if (!session.start_encoder(encode_path)) {
+		if (!session.set_session_codec(dump_codec_token(encode_path), false) ||
+			!session.start_encoder(encode_path)) {
 			WLOG_ERROR("failed to start encoder");
 			return 1;
 		}

@@ -48,6 +48,15 @@ void BitWriter::rbsp_trailing_bits() {
 	}
 }
 
+unsigned BitWriter::pad_to_byte() {
+	unsigned pad = 0;
+	while (bits_in_cur_ != 0) {
+		put_bit(0);
+		pad++;
+	}
+	return pad;
+}
+
 std::vector<uint8_t> escape_emulation(const std::vector<uint8_t> &rbsp) {
 	std::vector<uint8_t> out;
 	out.reserve(rbsp.size() + rbsp.size() / 2 + 1);

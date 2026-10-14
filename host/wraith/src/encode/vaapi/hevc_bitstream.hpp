@@ -71,16 +71,20 @@ struct SpsParams {
 std::vector<uint8_t> build_vps(uint8_t level_idc);
 std::vector<uint8_t> build_sps(const SpsParams &params);
 
-// cu_qp_delta_enabled_flag is fixed at 1 (with diff_cu_qp_delta_depth 0):
-// the driver's rate control varies QP within a picture, and without it the
-// emitted CU-level QP deltas would have nowhere to go. Matches the
-// VAEncPictureParameterBufferHEVC fields in vaapi_hevc_encoder.cpp.
-std::vector<uint8_t> build_pps();
+// cu_qp_delta_enabled_flag is fixed at 1: the driver's rate control
+// varies QP within a picture, and without it the emitted CU-level QP
+// deltas would have nowhere to go. `diff_cu_qp_delta_depth` sets the QP
+// group size, which has to be the one the hardware codes QP deltas at
+// (VaapiHevcEncoder says why). Matches the VAEncPictureParameterBufferHEVC
+// fields in vaapi_hevc_encoder.cpp.
+std::vector<uint8_t> build_pps(uint8_t diff_cu_qp_delta_depth);
 
 struct SliceHeaderParams {
 	bool is_idr;
-	uint32_t slice_type; // H.265 §7.4.7.1: 2 = I, 1 = P
-	uint32_t poc_lsb;    // slice_pic_order_cnt_lsb, ignored for an IDR
+	// H.265 §7.4.7.1: 2 = I, 1 = P, 0 = B. A B slice here is always the
+	// generalised-P kind: both lists hold the same one reference.
+	uint32_t slice_type;
+	uint32_t poc_lsb; // slice_pic_order_cnt_lsb, ignored for an IDR
 	uint8_t log2_max_pic_order_cnt_lsb_minus4;
 	// The reference is always the immediately preceding picture, so the
 	// short-term RPS this writes is the single entry (poc - 1, used).

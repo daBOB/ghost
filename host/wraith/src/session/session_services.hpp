@@ -69,12 +69,11 @@ public:
 	// without it gets the bare backend and none of refinement's costs.
 	bool set_session_codec(const std::string &codec_token, bool refine);
 
-	// -e: encode every composited frame to Annex-B H.264 appended to
-	// `output_path`. The dump is whatever the open encoder produces, so a
-	// session that then negotiates another codec, or lossless refinement,
-	// turns the rest of the file into that instead of plain H.264 -- the
-	// debug dump is a dump, not a muxer, and the two flags are not meant
-	// to be combined with a non-default session.
+	// -e: encode every composited frame to the session codec (H.264 unless
+	// set_session_codec() said otherwise) appended to `output_path`. The dump is whatever the open encoder
+	// produces, so a session that then negotiates another codec, or lossless refinement, turns the rest of
+	// the file into that instead of plain H.264 -- the debug dump is a dump, not a muxer, and the two flags
+	// are not meant to be combined with a non-default session.
 	bool start_encoder(const char *output_path);
 
 	// -l / -G: listen for a GDP session (gdp-spec.md §6). Implies the

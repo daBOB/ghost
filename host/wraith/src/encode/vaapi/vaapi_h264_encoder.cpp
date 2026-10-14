@@ -169,21 +169,22 @@ bool VaapiH264Encoder::submit_frame(VASurfaceID surface, int64_t pts_us) {
 
 	// Mesa's radeonsi VA-API frontend only learns nal_ref_idc/nal_unit_type
 	// for the slice NAL it emits by parsing a packed slice header (see
-	// h264_bitstream.hpp's wrap_nal()/build_slice_header_prefix() comments)
+	// h264_bitstream.hpp's wrap_nal()/build_slice_header() comments)
 	// -- without this every slice NAL gets written with header byte 0x00
-	// (nal_unit_type 0, undecodable). The structured slice buffer below,
-	// processed after this, still supplies the real per-frame values
-	// (frame_num, qp, deblocking, ...); this one only needs to walk the
-	// same syntax far enough for the driver to capture those two fields.
+	// (nal_unit_type 0, undecodable). On radeonsi the structured slice
+	// buffer below still supplies the real per-frame values (frame_num,
+	// qp, deblocking, ...); iHD instead writes this header out as it
+	// stands, so it has to be the complete, bit-exact slice header.
 	h264::SliceHeaderParams slice_hdr_params{};
 	slice_hdr_params.is_idr = is_idr;
 	slice_hdr_params.slice_type = is_idr ? 2u : 0u;
 	slice_hdr_params.frame_num = frame_num_;
 	slice_hdr_params.log2_max_frame_num_minus4 = log2_max_frame_num_minus4_;
 	slice_hdr_params.idr_pic_id = idr_pic_id_;
+	unsigned slice_pad_bits = 0;
 	std::vector<uint8_t> slice_nal = h264::wrap_nal(3, is_idr ? 5 : 1,
-		h264::escape_emulation(h264::build_slice_header_prefix(slice_hdr_params)));
-	if (!add_packed_header(buffers, VAEncPackedHeaderSlice, slice_nal)) {
+		h264::escape_emulation(h264::build_slice_header(slice_hdr_params, &slice_pad_bits)));
+	if (!add_packed_header(buffers, VAEncPackedHeaderSlice, slice_nal, slice_pad_bits)) {
 		vaDestroyBuffer(display_, coded_buf);
 		return false;
 	}

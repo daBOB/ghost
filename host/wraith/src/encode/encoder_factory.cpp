@@ -121,13 +121,8 @@ std::vector<std::string> hardware_encodable_codecs(int drm_fd) {
 		}
 	}
 	auto has_encode_entrypoint = [display](VAProfile profile) {
-		std::vector<VAEntrypoint> entrypoints((size_t)vaMaxNumEntrypoints(display));
-		int count = 0;
-		if (vaQueryConfigEntrypoints(display, profile, entrypoints.data(), &count) != VA_STATUS_SUCCESS) {
-			return false;
-		}
-		return std::find(entrypoints.begin(), entrypoints.begin() + count, VAEntrypointEncSlice) !=
-			entrypoints.begin() + count;
+		VAEntrypoint entrypoint;
+		return VaapiEncoderBase::find_encode_entrypoint(display, profile, &entrypoint);
 	};
 
 	// NVENC: asked once for every codec, since asking costs a session.

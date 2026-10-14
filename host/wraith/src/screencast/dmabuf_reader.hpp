@@ -37,8 +37,10 @@ public:
 	DmabufReader(const DmabufReader &) = delete;
 	DmabufReader &operator=(const DmabufReader &) = delete;
 
-	// An EGL display on `drm_fd` (not taken over; must outlive this) and a
-	// GLES context current on the calling thread. False if the driver
+	// An EGL display on the render node `drm_fd` is open on and a GLES
+	// context current on the calling thread. The display gets a DRM file
+	// of its own, opened anew from the node behind `drm_fd`, which the
+	// caller keeps (see open()'s comment for why). False if the driver
 	// lacks dmabuf import, surfaceless contexts or BGRA read-back.
 	bool open(int drm_fd);
 	bool is_open() const;

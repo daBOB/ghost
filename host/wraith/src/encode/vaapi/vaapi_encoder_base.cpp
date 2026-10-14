@@ -96,6 +96,26 @@ bool VaapiEncoderBase::open(const EncoderConfig &config) {
 	return true;
 }
 
+bool VaapiEncoderBase::find_encode_entrypoint(VADisplay display, VAProfile profile, VAEntrypoint *out) {
+	int max = vaMaxNumEntrypoints(display);
+	if (max <= 0) {
+		return false;
+	}
+	std::vector<VAEntrypoint> entrypoints((size_t)max);
+	int count = 0;
+	if (vaQueryConfigEntrypoints(display, profile, entrypoints.data(), &count) != VA_STATUS_SUCCESS) {
+		return false;
+	}
+	auto end = entrypoints.begin() + count;
+	for (VAEntrypoint wanted : {VAEntrypointEncSlice, VAEntrypointEncSliceLP}) {
+		if (std::find(entrypoints.begin(), end, wanted) != end) {
+			*out = wanted;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool VaapiEncoderBase::init_display() {
 	display_ = vaGetDisplayDRM(config_.drm_fd);
 	if (!display_) {
@@ -148,9 +168,19 @@ bool VaapiEncoderBase::init_encode_pipeline() {
 	attribs[2].type = VAConfigAttribEncPackedHeaders;
 	attribs[2].value = packed_header_flags();
 
-	VAStatus st = vaCreateConfig(display_, enc_profile(), VAEntrypointEncSlice, attribs, 3, &enc_config_);
+	if (!find_encode_entrypoint(display_, enc_profile(), &enc_entrypoint_)) {
+		WLOG_ERROR("vaapi_encoder: no encode entrypoint (EncSlice or EncSliceLP) for %s", enc_profile_name());
+		return false;
+	}
+	const char *entrypoint_name = enc_entrypoint_ == VAEntrypointEncSliceLP ? "EncSliceLP" : "EncSlice";
+	if (enc_entrypoint_ == VAEntrypointEncSliceLP) {
+		WLOG_INFO("vaapi_encoder: %s has only the low-power entrypoint, using EncSliceLP",
+			enc_profile_name());
+	}
+
+	VAStatus st = vaCreateConfig(display_, enc_profile(), enc_entrypoint_, attribs, 3, &enc_config_);
 	if (st != VA_STATUS_SUCCESS) {
-		WLOG_ERROR("vaapi_encoder: vaCreateConfig(%s/EncSlice) failed: %s", enc_profile_name(),
+		WLOG_ERROR("vaapi_encoder: vaCreateConfig(%s/%s) failed: %s", enc_profile_name(), entrypoint_name,
 			vaErrorStr(st));
 		return false;
 	}
@@ -565,10 +595,10 @@ bool VaapiEncoderBase::add_buffer(ParamBuffers &buffers, VABufferType type, unsi
 }
 
 bool VaapiEncoderBase::add_packed_header(ParamBuffers &buffers, VAEncPackedHeaderType type,
-	const std::vector<uint8_t> &nal) {
+	const std::vector<uint8_t> &nal, unsigned pad_bits) {
 	VAEncPackedHeaderParameterBuffer param = {};
 	param.type = type;
-	param.bit_length = (uint32_t)nal.size() * 8;
+	param.bit_length = (uint32_t)nal.size() * 8 - pad_bits;
 	param.has_emulation_bytes = 1;
 	return add_buffer(buffers, VAEncPackedHeaderParameterBufferType, sizeof(param), &param) &&
 		add_buffer(buffers, VAEncPackedHeaderDataBufferType, (unsigned)nal.size(), nal.data());

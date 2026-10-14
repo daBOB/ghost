@@ -128,41 +128,41 @@ std::vector<uint8_t> build_sps(const SpsParams &p) {
 }
 
 // pic_parameter_set_rbsp(), §7.3.2.3.
-std::vector<uint8_t> build_pps() {
+std::vector<uint8_t> build_pps(uint8_t diff_cu_qp_delta_depth) {
 	BitWriter bw;
-	bw.put_ue(0);      // pps_pic_parameter_set_id
-	bw.put_ue(0);      // pps_seq_parameter_set_id
-	bw.put_bit(0);     // dependent_slice_segments_enabled_flag
-	bw.put_bit(0);     // output_flag_present_flag
-	bw.put_bits(0, 3); // num_extra_slice_header_bits
-	bw.put_bit(0);     // sign_data_hiding_enabled_flag
-	bw.put_bit(0);     // cabac_init_present_flag
-	bw.put_ue(0);      // num_ref_idx_l0_default_active_minus1: one reference
-	bw.put_ue(0);      // num_ref_idx_l1_default_active_minus1
-	bw.put_se(0);      // init_qp_minus26: actual QP is rate-control driven
-	bw.put_bit(0);     // constrained_intra_pred_flag
-	bw.put_bit(0);     // transform_skip_enabled_flag
-	bw.put_bit(1);     // cu_qp_delta_enabled_flag -- see the header comment
-	bw.put_ue(0);      // diff_cu_qp_delta_depth: QP groups are whole CTBs
-	bw.put_se(0);      // pps_cb_qp_offset
-	bw.put_se(0);      // pps_cr_qp_offset
-	bw.put_bit(0);     // pps_slice_chroma_qp_offsets_present_flag
-	bw.put_bit(0);     // weighted_pred_flag
-	bw.put_bit(0);     // weighted_bipred_flag
-	bw.put_bit(0);     // transquant_bypass_enabled_flag
-	bw.put_bit(0);     // tiles_enabled_flag: one slice covers the picture
-	bw.put_bit(0);     // entropy_coding_sync_enabled_flag
-	bw.put_bit(1);     // pps_loop_filter_across_slices_enabled_flag
-	bw.put_bit(1);     // deblocking_filter_control_present_flag
-	bw.put_bit(0);     // deblocking_filter_override_enabled_flag
-	bw.put_bit(0);     // pps_deblocking_filter_disabled_flag
-	bw.put_se(0);      // pps_beta_offset_div2
-	bw.put_se(0);      // pps_tc_offset_div2
-	bw.put_bit(0);     // pps_scaling_list_data_present_flag
-	bw.put_bit(0);     // lists_modification_present_flag
-	bw.put_ue(0);      // log2_parallel_merge_level_minus2
-	bw.put_bit(0);     // slice_segment_header_extension_present_flag
-	bw.put_bit(0);     // pps_extension_present_flag
+	bw.put_ue(0);                      // pps_pic_parameter_set_id
+	bw.put_ue(0);                      // pps_seq_parameter_set_id
+	bw.put_bit(0);                     // dependent_slice_segments_enabled_flag
+	bw.put_bit(0);                     // output_flag_present_flag
+	bw.put_bits(0, 3);                 // num_extra_slice_header_bits
+	bw.put_bit(0);                     // sign_data_hiding_enabled_flag
+	bw.put_bit(0);                     // cabac_init_present_flag
+	bw.put_ue(0);                      // num_ref_idx_l0_default_active_minus1: one reference
+	bw.put_ue(0);                      // num_ref_idx_l1_default_active_minus1
+	bw.put_se(0);                      // init_qp_minus26: actual QP is rate-control driven
+	bw.put_bit(0);                     // constrained_intra_pred_flag
+	bw.put_bit(0);                     // transform_skip_enabled_flag
+	bw.put_bit(1);                     // cu_qp_delta_enabled_flag -- see the header comment
+	bw.put_ue(diff_cu_qp_delta_depth); // QP group size: see VaapiHevcEncoder
+	bw.put_se(0);                      // pps_cb_qp_offset
+	bw.put_se(0);                      // pps_cr_qp_offset
+	bw.put_bit(0);                     // pps_slice_chroma_qp_offsets_present_flag
+	bw.put_bit(0);                     // weighted_pred_flag
+	bw.put_bit(0);                     // weighted_bipred_flag
+	bw.put_bit(0);                     // transquant_bypass_enabled_flag
+	bw.put_bit(0);                     // tiles_enabled_flag: one slice covers the picture
+	bw.put_bit(0);                     // entropy_coding_sync_enabled_flag
+	bw.put_bit(1);                     // pps_loop_filter_across_slices_enabled_flag
+	bw.put_bit(1);                     // deblocking_filter_control_present_flag
+	bw.put_bit(0);                     // deblocking_filter_override_enabled_flag
+	bw.put_bit(0);                     // pps_deblocking_filter_disabled_flag
+	bw.put_se(0);                      // pps_beta_offset_div2
+	bw.put_se(0);                      // pps_tc_offset_div2
+	bw.put_bit(0);                     // pps_scaling_list_data_present_flag
+	bw.put_bit(0);                     // lists_modification_present_flag
+	bw.put_ue(0);                      // log2_parallel_merge_level_minus2
+	bw.put_bit(0);                     // slice_segment_header_extension_present_flag
+	bw.put_bit(0);                     // pps_extension_present_flag
 	bw.rbsp_trailing_bits();
 	return bw.bytes();
 }
@@ -200,11 +200,19 @@ std::vector<uint8_t> build_slice_header_prefix(const SliceHeaderParams &p) {
 		bw.put_bit(1); // slice_sao_chroma_flag
 	}
 
-	if (p.slice_type != 2) { // P (or B, which this encoder never emits)
-		bw.put_bit(1);       // num_ref_idx_active_override_flag
-		bw.put_ue(0);        // num_ref_idx_l0_active_minus1: the one reference
-		// lists_modification_present_flag and cabac_init_present_flag are
-		// both 0 in the PPS, and mvd_l1_zero_flag is B-only.
+	if (p.slice_type != 2) { // P, or generalised-P B
+		bool is_b = p.slice_type == 0;
+		bw.put_bit(1); // num_ref_idx_active_override_flag
+		bw.put_ue(0);  // num_ref_idx_l0_active_minus1: the one reference
+		if (is_b) {
+			bw.put_ue(0); // num_ref_idx_l1_active_minus1: the same one
+		}
+		// lists_modification_present_flag is 0 in the PPS.
+		if (is_b) {
+			bw.put_bit(0); // mvd_l1_zero_flag
+		}
+		// cabac_init_present_flag, sps_temporal_mvp_enabled_flag and both
+		// weighted prediction flags are 0, so nothing else until:
 		bw.put_ue(0); // five_minus_max_num_merge_cand: 5 candidates
 	}
 

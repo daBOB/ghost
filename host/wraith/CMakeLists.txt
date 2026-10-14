@@ -355,7 +355,8 @@ add_executable(wraith_gpu_tile_hash_test tests/gpu_tile_hash_test.cpp src/screen
   src/screencast/dmabuf_tile_source.cpp src/encode/refine/tile_source.cpp src/util/band_pool.cpp
   src/util/log.cpp)
 target_include_directories(wraith_gpu_tile_hash_test PRIVATE src)
-target_link_libraries(wraith_gpu_tile_hash_test PRIVATE gdp PkgConfig::GBM PkgConfig::EGL PkgConfig::GLESV2)
+target_link_libraries(wraith_gpu_tile_hash_test PRIVATE gdp PkgConfig::GBM PkgConfig::EGL PkgConfig::GLESV2
+  PkgConfig::LIBDRM)
 target_compile_options(wraith_gpu_tile_hash_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_gpu_tile_hash_test COMMAND wraith_gpu_tile_hash_test)
 set_tests_properties(wraith_gpu_tile_hash_test PROPERTIES SKIP_RETURN_CODE 77)

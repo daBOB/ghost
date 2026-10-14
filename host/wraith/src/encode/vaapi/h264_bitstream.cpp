@@ -119,7 +119,7 @@ std::vector<uint8_t> build_pps() {
 // redundant_pic_cnt_present_flag=0, entropy_coding_mode_flag=0/CAVLC). The
 // driver regenerates the *actual* emitted slice header from the structured
 // VAEncSliceParameterBufferH264 buffer, not from this.
-std::vector<uint8_t> build_slice_header_prefix(const SliceHeaderParams &p) {
+std::vector<uint8_t> build_slice_header(const SliceHeaderParams &p, unsigned *pad_bits) {
 	BitWriter bw;
 	bw.put_ue(0); // first_mb_in_slice
 	bw.put_ue(p.slice_type);
@@ -144,7 +144,8 @@ std::vector<uint8_t> build_slice_header_prefix(const SliceHeaderParams &p) {
 	bw.put_ue(0); // disable_deblocking_filter_idc
 	bw.put_se(0); // slice_alpha_c0_offset_div2
 	bw.put_se(0); // slice_beta_offset_div2
-	bw.rbsp_trailing_bits();
+	// slice_data() follows directly, so no rbsp_trailing_bits().
+	*pad_bits = bw.pad_to_byte();
 	return bw.bytes();
 }
 

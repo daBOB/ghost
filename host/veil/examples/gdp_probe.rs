@@ -11,6 +11,9 @@
 //   cargo run -p veil --example gdp_probe -- --direct <host> <port> <token> <cert sha256> \
 //       [--seconds <n>] [--size <WxH>]
 //
+// --login-only stops after the login and prints the session's host, port,
+// token and certificate as spectre arguments, to hand the brokered session
+// to a real client.
 // --type picks the session type SessionOpen asks for (empty: the host's
 // default, or the user's running session).
 // --direct skips the login and opens the session on a direct-connect wraith
@@ -169,11 +172,13 @@ async fn main() -> Result<()> {
     // (gdp-spec.md §2.2).
     let extra_stream = args.iter().any(|a| a == "--extra-stream");
     args.retain(|a| a != "--extra-stream");
+    let login_only = args.iter().any(|a| a == "--login-only");
+    args.retain(|a| a != "--login-only");
     let direct = args.first().is_some_and(|a| a == "--direct");
     let positional = if direct { 5 } else { 4 };
     if args.len() < positional {
         bail!(
-            "usage: gdp_probe <server> <port> <user> <password> [--device <name>] [--type <id>] [--seconds <n>] [--size <WxH>]\n       \
+            "usage: gdp_probe <server> <port> <user> <password> [--device <name>] [--type <id>] [--seconds <n>] [--size <WxH>] [--login-only]\n       \
              gdp_probe --direct <host> <port> <token> <cert sha256> [--seconds <n>] [--size <WxH>] [--change <WxH>] [--take-over] [--extra-stream] [--scroll <notches>]"
         );
     }
@@ -199,6 +204,10 @@ async fn main() -> Result<()> {
         let r = login(server, port, user, password, device_name, session_type).await?;
         let host = if r.host.is_empty() { server.clone() } else { r.host.clone() };
         println!("probe: redirect to {host}:{} (cert {})", r.port, &r.cert_sha256[..16]);
+        if login_only {
+            println!("-h {host} -p {} -t {} -P {}", r.port, r.token, r.cert_sha256);
+            return Ok(());
+        }
         (host, r.port as u16, r.token, r.cert_sha256)
     };
 

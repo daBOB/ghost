@@ -27,6 +27,11 @@ public:
 	void put_ue(uint32_t value);          // unsigned Exp-Golomb
 	void put_se(int32_t value);           // signed Exp-Golomb
 	void rbsp_trailing_bits();            // stop bit + zero pad to byte
+	// Zero-pads to the next byte boundary *without* a stop bit and returns
+	// how many bits that added: for a packed header whose exact bit length
+	// goes to the driver alongside it, with the driver's own data to follow
+	// mid-byte.
+	unsigned pad_to_byte();
 
 	const std::vector<uint8_t> &bytes() const { return bytes_; }
 

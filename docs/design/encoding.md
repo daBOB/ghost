@@ -119,6 +119,28 @@ replicates the edge into the padding. spectre crops it off using
 `SessionAccept`'s display size; any other consumer of the stream sees up
 to 7 extra columns or rows.
 
+**Intel (iHD).** The free iHD build offers only the low-power entrypoint
+(`EncSliceLP`) for H.264 and H.265; `find_encode_entrypoint()` takes
+`EncSlice` where there is one and `EncSliceLP` otherwise, for the encoder
+and the render-node probe alike. iHD writes a packed slice header into
+the stream as given and appends the hardware's slice data after
+`bit_length` bits, so H.264's slice header is sent bit-exact, without
+`rbsp_trailing_bits()` (CAVLC slice data isn't byte-aligned). For H.265
+the SPS follows what the driver reports: transform depth from
+`VAConfigAttribEncHEVCBlockSizes` (iHD allows 2; announcing 3 made every
+picture undecodable from its first CTB) and AMP, SAO and strong intra
+smoothing from `VAConfigAttribEncHEVCFeatures`. iHD reports
+`VA_PREDICTION_DIRECTION_BI_NOT_EMPTY` (no P slices), so P pictures go out
+as generalised-P: a P picture whose slices are B, both lists holding the
+previous picture, as ffmpeg's `hevc_vaapi` sends them. QP groups are as
+small as the smallest coding block (`diff_cu_qp_delta_depth` = CTB to
+min CB): the low-power encoder changes QP at that granularity, and with
+whole-CTB groups the decoder applied the wrong QP, which shows as ghosts
+of older text rather than decode errors. iHD and iris (the GL driver
+behind `DmabufReader`) keep separate GEM handle tables, so the reader
+opens a DRM file of its own: sharing the encoder's left a refined
+session's tile shaders reading blank buffers.
+
 ## NVENC
 
 `encode/nvenc/`: one `NvencEncoder` for all three codecs. NVENC takes the
@@ -195,6 +217,10 @@ x264 (`encode/software/`), used when no hardware row opens or `-F` /
 - NVIDIA lowers its clocks under a light load, and NVENC slows with
   them: a 4K frame's encode went from 9 to 17 ms on an RTX 3070 Ti. Pinning clocks
   (`nvidia-smi -lgc`) is the host administrator's choice; wraith doesn't.
+- Intel has run on one machine, an N100 (Alder Lake-N, iHD 26.1.2, Mesa
+  26.0): H.264 and H.265 on both the non-free driver (`EncSlice`) and the
+  free one (`EncSliceLP` only), with refinement. Not yet seen: AV1 on
+  Intel (Arc or Meteor Lake and newer).
 - AV1 can't crop, so non-multiple-of-8 sizes carry padding (cropped by
   spectre).
 - Software encode is H.264 only, by decision.
