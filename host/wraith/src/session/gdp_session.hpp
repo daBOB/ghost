@@ -11,8 +11,10 @@
 // a predicate so this class doesn't need to know which mode produced it.
 #pragma once
 
+#include "encode/encoder.hpp" // ColorMatrix
 #include "gdp/clipboard.hpp"
 #include "gdp/clock.hpp"
+#include "gdp/negotiation.hpp"
 #include "gdp/framing.hpp"
 #include "gdp/gamepad.hpp"
 #include "gdp/transport.hpp"
@@ -217,6 +219,15 @@ private:
 	// capability negotiation, then SessionAccept. Returns false (having
 	// closed the connection) if there's no usable codec.
 	bool accept_session(const gdp::session::SessionHello &hello);
+	// Opens the encoder for `codec` at the deepest bit depth the viewer
+	// declared (codec_formats_), wraith.toml allows and a backend opens at
+	// -- 10, then 8 (gdp-spec.md §7.3). False if none opened at any depth.
+	bool open_session_encoder(const std::string &codec, bool refine);
+	// The matrix a session on `codec` is coded with: BT.709 when the client
+	// negotiated "color" (gdp-spec.md §7.3), else the codec's default --
+	// BT.601 for the block codecs. PyroWave converts with its own BT.709
+	// either way, and its default says so.
+	ColorMatrix session_matrix(const std::string &codec) const;
 	// Sends `env` on the control stream, logging (never silently dropping)
 	// an encode failure -- which can't happen for our own messages.
 	void send_control(const gdp::session::ControlEnvelope &env);
@@ -307,6 +318,10 @@ private:
 	bool authenticated_ = false;
 	std::string video_codec_;
 	std::vector<std::string> capabilities_;
+	// SessionHello.codec_formats (gdp-spec.md §7.3): the depths the viewer
+	// decodes beyond 8 bits, per codec. Kept for the reopen on a
+	// resolution change, which renegotiates the depth the same way.
+	std::vector<gdp::CodecFormat> codec_formats_;
 	// How the last SessionHello was answered, for status_text(): kept past
 	// the session, since a negotiation that failed is what a report is for.
 	std::string negotiation_summary_;

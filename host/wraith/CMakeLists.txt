@@ -385,6 +385,14 @@ target_compile_definitions(wraith_config_test PRIVATE
 target_compile_options(wraith_config_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_config_test COMMAND wraith_config_test)
 
+# The hand-written HEVC and AV1 sequence headers at 8 and 10 bits
+# (docs/design/encoding.md): profile, depth fields, parsed back.
+add_executable(wraith_bitstream_test tests/bitstream_test.cpp src/encode/vaapi/nal_bitstream.cpp
+  src/encode/vaapi/hevc_bitstream.cpp src/encode/vaapi/av1_obu.cpp)
+target_include_directories(wraith_bitstream_test PRIVATE src)
+target_compile_options(wraith_bitstream_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_bitstream_test COMMAND wraith_bitstream_test)
+
 add_executable(wraith_xrgb_convert_test tests/xrgb_convert_test.cpp src/encode/software/xrgb_convert.cpp
   src/util/band_pool.cpp)
 target_include_directories(wraith_xrgb_convert_test PRIVATE src)

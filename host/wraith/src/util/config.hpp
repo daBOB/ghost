@@ -107,6 +107,11 @@ struct WraithConfig {
 		// NVENC encodes straight from the GPU; false uploads every frame
 		// from host memory (NvencEncoder).
 		bool nvenc_zero_copy = true;
+		// Bits per component the encoder codes at (EncoderConfig::bit_depth):
+		// 0 is "auto" -- 10 whenever the client declares it for the
+		// session's codec and a backend opens at it, else 8; 8 forces the
+		// 8-bit baseline for every session.
+		uint32_t bit_depth = 0;
 		// PyroWave's ceiling, in bits per output pixel at 60 fps: where a
 		// pyrowave session's rate controller tops out instead of
 		// max_bitrate_mbps (SessionServices::encode_bitrate_bps()). 1.0 is

@@ -5,10 +5,13 @@
 //
 // Everything below is true of any VA-API encoder wraith might run: open a
 // VADisplay on the render node, import the caller's RGB dmabuf as a VA
-// surface (zero copy), VPP colour-space-convert it into an NV12 surface
-// from a small driver-allocated pool (every encode entrypoint here only
-// accepts YUV420 input), hand that to the codec's parameter buffers, and
-// drain the coded buffer. Nothing round-trips through system RAM.
+// surface (zero copy), VPP colour-space-convert it into an NV12 (8-bit)
+// or P010 (10-bit, EncoderConfig::bit_depth) surface from a small
+// driver-allocated pool (every encode entrypoint here only accepts 4:2:0
+// input), hand that to the codec's parameter buffers, and drain the coded
+// buffer. Nothing round-trips through system RAM. The depth is the one
+// thing the base decides from the config: the codec subclasses read
+// bit_depth() to pick their profile and write it into their headers.
 //
 // What a codec adds on top is its parameter-buffer triplet (sequence /
 // picture / slice), its own sequence-header writer, and its level
@@ -34,7 +37,7 @@ public:
 	// after a failed open() never destroys a surface it didn't create.
 	VaapiEncoderBase() {
 		std::fill(std::begin(dpb_surfaces_), std::end(dpb_surfaces_), VA_INVALID_ID);
-		std::fill(std::begin(nv12_surfaces_), std::end(nv12_surfaces_), VA_INVALID_ID);
+		std::fill(std::begin(yuv_surfaces_), std::end(yuv_surfaces_), VA_INVALID_ID);
 	}
 	~VaapiEncoderBase() override;
 
@@ -58,10 +61,16 @@ public:
 	int completion_fd() const override { return asynchronous_ ? timer_fd_ : -1; }
 	bool ready_for_frame() const override { return !asynchronous_ || pending_.empty(); }
 
-	// The VA profile to create the encode config with. Public so the
-	// encoder factory can ask a render node whether it has an encode
-	// entrypoint for it (hardware_encodable_codecs) without opening one.
+	// The VA profile to create the encode config with -- for the depth the
+	// encoder was (or, before open(), would be) opened at: HEVC's is Main
+	// or Main10. Public so the encoder factory can ask a render node
+	// whether it has an encode entrypoint for it (hardware_encodable_codecs)
+	// without opening one; a fresh encoder answers for 8 bits.
 	virtual VAProfile enc_profile() const = 0;
+	// EncoderConfig::bit_depth as open() took it: 8 or 10. What the input
+	// pool and DPB are allocated as (NV12 or P010), and what the codec's
+	// sequence header has to say.
+	uint32_t bit_depth() const { return config_.bit_depth; }
 
 	// The encode entrypoint `display` offers for `profile`: EncSlice when
 	// there is one, else EncSliceLP (Intel's VDEnc), which is all iHD
@@ -77,7 +86,7 @@ protected:
 	// messages ("H264Main", "HEVCMain", "AV1Profile0").
 	virtual const char *enc_profile_name() const = 0;
 
-	// Frame dimensions are rounded up to a multiple of this for the NV12
+	// Frame dimensions are rounded up to a multiple of this for the input
 	// and DPB surfaces, and hence for the coded picture size. The default
 	// of 16 is H.264's macroblock size, with the difference cropped away
 	// in the SPS; VaapiHevcEncoder and VaapiAv1Encoder override it (64 and
@@ -96,8 +105,8 @@ protected:
 	// codec's level, build its parameter-set NALs, reset its own counters.
 	virtual bool init_codec() = 0;
 
-	// Encode one frame from `surface` (an NV12 surface out of the input
-	// pool). Implementations build their parameter buffers with the
+	// Encode one frame from `surface` (an NV12 or P010 surface out of the
+	// input pool). Implementations build their parameter buffers with the
 	// helpers below and finish with submit_picture().
 	virtual bool submit_frame(VASurfaceID surface, int64_t pts_us) = 0;
 
@@ -204,11 +213,15 @@ private:
 	bool ensure_cpu_upload_surface();
 	void destroy_cpu_upload_surface();
 
-	// VPP-converts `rgb_surface` into the next surface from nv12_surfaces_
+	// VPP-converts `rgb_surface` into the next surface from yuv_surfaces_
 	// and returns it. Blocks (vaSyncSurface) until the conversion completes,
 	// so it's safe for the caller to release/reuse `rgb_surface`'s backing
 	// dmabuf immediately after this returns.
-	VASurfaceID convert_to_nv12(VASurfaceID rgb_surface);
+	VASurfaceID convert_to_yuv(VASurfaceID rgb_surface);
+	// The surface format the depth maps to: VA_RT_FORMAT_YUV420 + NV12, or
+	// VA_RT_FORMAT_YUV420_10 + P010.
+	unsigned yuv_rt_format() const;
+	uint32_t yuv_fourcc() const;
 
 	EncodedPacket drain_coded_buffer(VABufferID coded_buf, bool keyframe, int64_t pts_us);
 
@@ -216,12 +229,12 @@ private:
 	VAConfigID vpp_config_ = VA_INVALID_ID;
 	VAContextID vpp_context_ = VA_INVALID_ID;
 
-	// Encode *input* pool: the VPP writes each frame's NV12 into the next
-	// one and it is the render target handed to vaBeginPicture. These are
-	// never named in the picture parameters -- see dpb_surfaces_.
-	static constexpr int kNumNv12Surfaces = 2;
-	VASurfaceID nv12_surfaces_[kNumNv12Surfaces];
-	int next_nv12_ = 0;
+	// Encode *input* pool: the VPP writes each frame's NV12/P010 into the
+	// next one and it is the render target handed to vaBeginPicture. These
+	// are never named in the picture parameters -- see dpb_surfaces_.
+	static constexpr int kNumYuvSurfaces = 2;
+	VASurfaceID yuv_surfaces_[kNumYuvSurfaces];
+	int next_yuv_ = 0;
 
 	VASurfaceID cpu_upload_surface_ = VA_INVALID_ID;
 	VAImage cpu_upload_image_ = {};

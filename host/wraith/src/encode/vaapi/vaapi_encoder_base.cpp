@@ -64,6 +64,10 @@ bool VaapiEncoderBase::open(const EncoderConfig &config) {
 		WLOG_ERROR("vaapi_encoder: width/height must be even (got %ux%u)", config_.width, config_.height);
 		return false;
 	}
+	if (config_.bit_depth != 8 && config_.bit_depth != 10) {
+		WLOG_ERROR("vaapi_encoder: %u-bit is not a depth this encoder codes (8 or 10)", config_.bit_depth);
+		return false;
+	}
 
 	uint32_t align = surface_alignment();
 	padded_width_ = (config_.width + align - 1) / align * align;
@@ -79,7 +83,7 @@ bool VaapiEncoderBase::open(const EncoderConfig &config) {
 	rc_dirty_ = true;
 	fr_sent_ = false;
 	last_ref_surface_ = VA_INVALID_ID;
-	next_nv12_ = 0;
+	next_yuv_ = 0;
 	next_dpb_ = 0;
 
 	if (!init_codec()) {
@@ -151,10 +155,18 @@ bool VaapiEncoderBase::init_vpp_pipeline() {
 	return true;
 }
 
+unsigned VaapiEncoderBase::yuv_rt_format() const {
+	return config_.bit_depth == 10 ? VA_RT_FORMAT_YUV420_10 : VA_RT_FORMAT_YUV420;
+}
+
+uint32_t VaapiEncoderBase::yuv_fourcc() const {
+	return config_.bit_depth == 10 ? VA_FOURCC_P010 : VA_FOURCC_NV12;
+}
+
 bool VaapiEncoderBase::init_encode_pipeline() {
 	VAConfigAttrib attribs[3];
 	attribs[0].type = VAConfigAttribRTFormat;
-	attribs[0].value = VA_RT_FORMAT_YUV420;
+	attribs[0].value = yuv_rt_format();
 	attribs[1].type = VAConfigAttribRateControl;
 	// VBR, not CBR, for the same reason x264_encoder.cpp uses CRF under a
 	// VBV cap: a desktop is static most of the time and should cost nothing
@@ -178,7 +190,22 @@ bool VaapiEncoderBase::init_encode_pipeline() {
 			enc_profile_name());
 	}
 
-	VAStatus st = vaCreateConfig(display_, enc_profile(), enc_entrypoint_, attribs, 3, &enc_config_);
+	// The entrypoint may exist for the profile and still not take this
+	// surface format (an AV1 Profile0 encoder that is 8-bit only: the
+	// profile covers both depths). vaCreateConfig doesn't always refuse
+	// an unsupported RT format, so ask first and let a 10-bit open fail
+	// here, cleanly, for the factory to fall back from.
+	VAConfigAttrib rt_query = {};
+	rt_query.type = VAConfigAttribRTFormat;
+	VAStatus st = vaGetConfigAttributes(display_, enc_profile(), enc_entrypoint_, &rt_query, 1);
+	if (st == VA_STATUS_SUCCESS && rt_query.value != VA_ATTRIB_NOT_SUPPORTED &&
+		(rt_query.value & yuv_rt_format()) == 0) {
+		WLOG_INFO("vaapi_encoder: %s/%s doesn't take %u-bit 4:2:0 surfaces (RT formats 0x%x)",
+			enc_profile_name(), entrypoint_name, config_.bit_depth, rt_query.value);
+		return false;
+	}
+
+	st = vaCreateConfig(display_, enc_profile(), enc_entrypoint_, attribs, 3, &enc_config_);
 	if (st != VA_STATUS_SUCCESS) {
 		WLOG_ERROR("vaapi_encoder: vaCreateConfig(%s/%s) failed: %s", enc_profile_name(), entrypoint_name,
 			vaErrorStr(st));
@@ -189,26 +216,27 @@ bool VaapiEncoderBase::init_encode_pipeline() {
 	fmt_attrib.type = VASurfaceAttribPixelFormat;
 	fmt_attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
 	fmt_attrib.value.type = VAGenericValueTypeInteger;
-	fmt_attrib.value.value.i = VA_FOURCC_NV12;
+	fmt_attrib.value.value.i = (int32_t)yuv_fourcc();
+	const char *fourcc_name = config_.bit_depth == 10 ? "P010" : "NV12";
 
-	st = vaCreateSurfaces(display_, VA_RT_FORMAT_YUV420, padded_width_, padded_height_, nv12_surfaces_,
-		kNumNv12Surfaces, &fmt_attrib, 1);
+	st = vaCreateSurfaces(display_, yuv_rt_format(), padded_width_, padded_height_, yuv_surfaces_,
+		kNumYuvSurfaces, &fmt_attrib, 1);
 	if (st != VA_STATUS_SUCCESS) {
-		WLOG_ERROR("vaapi_encoder: vaCreateSurfaces(NV12 pool) failed: %s", vaErrorStr(st));
+		WLOG_ERROR("vaapi_encoder: vaCreateSurfaces(%s pool) failed: %s", fourcc_name, vaErrorStr(st));
 		return false;
 	}
-	st = vaCreateSurfaces(display_, VA_RT_FORMAT_YUV420, padded_width_, padded_height_, dpb_surfaces_,
+	st = vaCreateSurfaces(display_, yuv_rt_format(), padded_width_, padded_height_, dpb_surfaces_,
 		kNumDpbSurfaces, &fmt_attrib, 1);
 	if (st != VA_STATUS_SUCCESS) {
-		WLOG_ERROR("vaapi_encoder: vaCreateSurfaces(DPB pool) failed: %s", vaErrorStr(st));
+		WLOG_ERROR("vaapi_encoder: vaCreateSurfaces(%s DPB pool) failed: %s", fourcc_name, vaErrorStr(st));
 		return false;
 	}
 
 	// Every surface the context will touch, inputs and DPB alike: some
 	// drivers (not Mesa) validate render targets against this list.
-	VASurfaceID render_targets[kNumNv12Surfaces + kNumDpbSurfaces];
-	std::copy(std::begin(nv12_surfaces_), std::end(nv12_surfaces_), render_targets);
-	std::copy(std::begin(dpb_surfaces_), std::end(dpb_surfaces_), render_targets + kNumNv12Surfaces);
+	VASurfaceID render_targets[kNumYuvSurfaces + kNumDpbSurfaces];
+	std::copy(std::begin(yuv_surfaces_), std::end(yuv_surfaces_), render_targets);
+	std::copy(std::begin(dpb_surfaces_), std::end(dpb_surfaces_), render_targets + kNumYuvSurfaces);
 	st = vaCreateContext(display_, enc_config_, (int)padded_width_, (int)padded_height_, VA_PROGRESSIVE,
 		render_targets, (int)std::size(render_targets), &enc_context_);
 	if (st != VA_STATUS_SUCCESS) {
@@ -317,12 +345,12 @@ VASurfaceID VaapiEncoderBase::import_rgb_surface(const DmabufFrame &frame) {
 	return surface;
 }
 
-VASurfaceID VaapiEncoderBase::convert_to_nv12(VASurfaceID rgb_surface) {
-	VASurfaceID target = nv12_surfaces_[next_nv12_];
-	next_nv12_ = (next_nv12_ + 1) % kNumNv12Surfaces;
+VASurfaceID VaapiEncoderBase::convert_to_yuv(VASurfaceID rgb_surface) {
+	VASurfaceID target = yuv_surfaces_[next_yuv_];
+	next_yuv_ = (next_yuv_ + 1) % kNumYuvSurfaces;
 
 	// submit_frame() doesn't wait for the encode reading this same surface
-	// (from up to kNumNv12Surfaces pushes ago) to finish before returning --
+	// (from up to kNumYuvSurfaces pushes ago) to finish before returning --
 	// only push() as a whole is synchronous, via the vaSyncSurface below.
 	// Without this wait, a VPP write here can race a still-in-flight encode
 	// read of the same surface once the pool wraps around.
@@ -337,37 +365,37 @@ VASurfaceID VaapiEncoderBase::convert_to_nv12(VASurfaceID rgb_surface) {
 	VAProcPipelineParameterBuffer pipeline = {};
 	pipeline.surface = rgb_surface;
 
-	// The YCbCr matrix. The H.264 SPS (h264_bitstream.cpp) and the AV1
-	// sequence header (av1_obu.cpp) state BT.601 studio range; the H.265
-	// encoder writes no colour description, so there host and client agree
-	// by convention. spectre picks BT.601
-	// (VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601 in
-	// present/video_image_source.cpp) and the software path's
-	// xrgb_to_i420() uses BT.601 coefficients, so BT.601 is that convention
-	// and this conversion has to match it.
+	// The YCbCr matrix: the session's (EncoderConfig::matrix), BT.601 by
+	// default and BT.709 when the client negotiated "color" -- what
+	// OutputDescriptor.color, the stream's own VUI or sequence header, and
+	// xrgb_to_i420() on the software path all say too.
 	//
-	// Left unset, radeonsi defaults to BT.709 for both ends, which decoded
-	// as BT.601 shifts every saturated colour (pure red's luma is 63
-	// instead of 82). Both ends must say BT.601, which matches the scalar
-	// reference to within 1 LSB of rounding. Setting only
-	// output_color_standard leaves the input taken as BT.709, and the
-	// driver then converts primaries as well as the matrix -- a gamut
-	// change these plain desktop RGB pixels don't want; the only transform
-	// wanted here is RGB -> YCbCr.
-	pipeline.surface_color_standard = VAProcColorStandardBT601;
-	pipeline.output_color_standard = VAProcColorStandardBT601;
+	// It has to be set, and on both ends. Left unset, radeonsi defaults to
+	// BT.709, which decoded as BT.601 shifts every saturated colour (pure
+	// red's luma is 63 instead of 82). With both ends the same standard,
+	// the result matches the scalar reference to within 1 LSB of rounding.
+	// Setting only output_color_standard leaves the input taken as BT.709,
+	// and the driver then converts primaries as well as the matrix -- a
+	// gamut change these plain desktop RGB pixels don't want; the only
+	// transform wanted here is RGB -> YCbCr.
+	const VAProcColorStandardType standard =
+		config_.matrix == ColorMatrix::Bt709 ? VAProcColorStandardBT709 : VAProcColorStandardBT601;
+	pipeline.surface_color_standard = standard;
+	pipeline.output_color_standard = standard;
 	// Already the driver's default (a 0..255 grey ramp converts to
 	// 16..235 either way), so these are pinned rather than corrective --
 	// full-range RGB in, studio-range YCbCr out is what spectre's
 	// VK_SAMPLER_YCBCR_RANGE_ITU_NARROW expects, and it shouldn't depend on
-	// a default staying put.
+	// a default staying put. At 10 bits the target is P010 and the range
+	// scales with it (64..940): the VPP does that from the surface format,
+	// nothing here changes with the depth.
 	pipeline.input_color_properties.color_range = VA_SOURCE_RANGE_FULL;
 	pipeline.output_color_properties.color_range = VA_SOURCE_RANGE_REDUCED;
 
 	// One VPP submission per (source rect -> target rect) pair. The first
 	// is the picture itself; the rest, only when the surface is padded,
 	// replicate the picture's last column/row/corner pixel across the
-	// padding. Fresh surfaces are zeroed, and zero NV12 is green, so
+	// padding. Fresh surfaces are zeroed, and zero NV12/P010 is green, so
 	// without this the padding is a green strip that the encoder's in-loop
 	// filters (deblocking, CDEF for AV1) smear a pixel or two into the
 	// real picture along the right/bottom edge -- visible on av1, whose
@@ -446,17 +474,17 @@ bool VaapiEncoderBase::push(const DmabufFrame &frame, int64_t pts_us) {
 		return false;
 	}
 
-	VASurfaceID nv12 = convert_to_nv12(rgb);
+	VASurfaceID yuv = convert_to_yuv(rgb);
 	// The imported surface is synced before it is destroyed, not only the
-	// NV12 output: a synced output is not proof the input read has
+	// YUV output: a synced output is not proof the input read has
 	// finished on every driver.
 	vaSyncSurface(display_, rgb);
 	vaDestroySurfaces(display_, &rgb, 1);
-	if (nv12 == VA_INVALID_ID) {
+	if (yuv == VA_INVALID_ID) {
 		return false;
 	}
 
-	return submit_frame(nv12, pts_us);
+	return submit_frame(yuv, pts_us);
 }
 
 bool VaapiEncoderBase::ensure_cpu_upload_surface() {
@@ -535,7 +563,7 @@ bool VaapiEncoderBase::push_cpu(const uint8_t *data, uint32_t width, uint32_t he
 		return false;
 	}
 
-	// The surface is read by the VPP in convert_to_nv12() below, which
+	// The surface is read by the VPP in convert_to_yuv() below, which
 	// syncs before returning, so by the time we're back here to overwrite
 	// it nothing is still reading it.
 	uint8_t *mapped = nullptr;
@@ -559,11 +587,11 @@ bool VaapiEncoderBase::push_cpu(const uint8_t *data, uint32_t width, uint32_t he
 		return false;
 	}
 
-	VASurfaceID nv12 = convert_to_nv12(cpu_upload_surface_);
-	if (nv12 == VA_INVALID_ID) {
+	VASurfaceID yuv = convert_to_yuv(cpu_upload_surface_);
+	if (yuv == VA_INVALID_ID) {
 		return false;
 	}
-	return submit_frame(nv12, pts_us);
+	return submit_frame(yuv, pts_us);
 }
 
 bool VaapiEncoderBase::take_idr_decision() {
@@ -627,7 +655,7 @@ bool VaapiEncoderBase::add_rate_control_buffers(ParamBuffers &buffers) {
 		// 1 on, 2 off). iHD's low-power HEVC encoder has it on by default
 		// and raises QP on blocks it rates as simple -- the dark gradient
 		// of a wallpaper came out as flat stepped squares that no later
-		// frame refined (n100, 2026-10-14). Off, the gradient keeps its
+		// frame refined (Intel N100, 2026-10-14). Off, the gradient keeps its
 		// grain, as ffmpeg's hevc_vaapi (which also sends 2) encodes it.
 		// iHD's H.264 encoder and radeonsi don't change with it.
 		rc->rc_flags.bits.mb_rate_control = 2;
@@ -652,7 +680,10 @@ bool VaapiEncoderBase::add_rate_control_buffers(ParamBuffers &buffers) {
 }
 
 VABufferID VaapiEncoderBase::create_coded_buffer() {
-	unsigned coded_buf_size = padded_width_ * padded_height_ * 3 / 2 + 0x10000;
+	// A raw 4:2:0 frame's size -- a byte per sample at 8 bits, two at 10 --
+	// plus headroom: no coded picture is larger than its uncompressed self.
+	unsigned bytes_per_sample = config_.bit_depth > 8 ? 2 : 1;
+	unsigned coded_buf_size = padded_width_ * padded_height_ * 3 / 2 * bytes_per_sample + 0x10000;
 	VABufferID coded_buf = VA_INVALID_ID;
 	VAStatus st =
 		vaCreateBuffer(display_, enc_context_, VAEncCodedBufferType, coded_buf_size, 1, nullptr, &coded_buf);
@@ -778,7 +809,7 @@ void VaapiEncoderBase::destroy_surface_pools() {
 			std::fill(pool, pool + count, VA_INVALID_ID);
 		}
 	};
-	destroy(nv12_surfaces_, kNumNv12Surfaces);
+	destroy(yuv_surfaces_, kNumYuvSurfaces);
 	destroy(dpb_surfaces_, kNumDpbSurfaces);
 }
 

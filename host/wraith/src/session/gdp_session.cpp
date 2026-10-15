@@ -7,6 +7,7 @@
 #include "session/hid_evdev.hpp"
 #include "session/raw_controllers.hpp"
 #include "session/seat_client.hpp"
+#include "encode/encoder_factory.hpp"
 
 #include "gdp/clipboard.hpp"
 #include "gdp/datagram.hpp"
@@ -50,7 +51,9 @@ LinkProfile link_profile_of(gdp::session::NetworkProfile profile) {
 // it per session.
 // Lossless refinement is unconditional: every encoder backend has a
 // push_cpu() path for the wrapper to feed (encode/refine/refine_encoder.hpp).
-const std::vector<std::string> kSupportedCapabilities = {gdp::kCapabilityRefine};
+// "color" too: every encoder converts with whichever matrix the session
+// asks for (GdpSession::session_matrix()).
+const std::vector<std::string> kSupportedCapabilities = {gdp::kCapabilityRefine, gdp::kCapabilityColor};
 
 // gdp-spec.md §6.3. spectre sends SessionHello
 // the moment its connection is up, so a real client is pending for about
@@ -381,16 +384,55 @@ void GdpSession::fill_output(gdp::session::OutputDescriptor *output) const {
 	output->mutable_display()->set_refresh_mhz(60000);
 	output->mutable_display()->set_scale(1.0);
 	// What the encoder really does (gdp-spec.md §7.3): the desktop
-	// is sRGB, converted to 4:2:0 with BT.601 limited-range coefficients,
-	// except for PyroWave's own full-range BT.709.
+	// is sRGB, converted to 4:2:0 with session_matrix()'s limited-range
+	// coefficients, except for PyroWave's own full-range BT.709.
 	const bool pyrowave = video_codec_ == gdp::kVideoCodecPyrowave;
 	auto *color = output->mutable_color();
-	color->set_matrix(pyrowave ? gdp::session::COLOR_MATRIX_BT709 : gdp::session::COLOR_MATRIX_BT601);
+	color->set_matrix(session_matrix(video_codec_) == ColorMatrix::Bt709 ? gdp::session::COLOR_MATRIX_BT709
+																		 : gdp::session::COLOR_MATRIX_BT601);
 	color->set_range(pyrowave ? gdp::session::COLOR_RANGE_FULL : gdp::session::COLOR_RANGE_LIMITED);
 	color->set_primaries(gdp::session::COLOR_PRIMARIES_BT709);
 	color->set_transfer(gdp::session::COLOR_TRANSFER_SRGB);
-	color->set_bit_depth(8);
+	// 8 or 10: what open_session_encoder() settled on, within the viewer's
+	// declaration. The matrix and range are the same at either depth
+	// (limited range scales with the depth, gdp-spec.md §7.3).
+	color->set_bit_depth(host_.session().session_bit_depth());
 	color->set_chroma(gdp::session::CHROMA_420);
+}
+
+ColorMatrix GdpSession::session_matrix(const std::string &codec) const {
+	if (codec == gdp::kVideoCodecPyrowave) {
+		return ColorMatrix::Bt709;
+	}
+	// A client that didn't offer "color" may ignore OutputDescriptor.color
+	// and assume the codec default (spectre before 2026-10-14 did), so only
+	// one that promised to apply it gets anything else.
+	return gdp::has_capability(capabilities_, gdp::kCapabilityColor) ? ColorMatrix::Bt709
+																	 : ColorMatrix::Bt601;
+}
+
+bool GdpSession::open_session_encoder(const std::string &codec, bool refine) {
+	SessionServices &services = host_.session();
+	// [encode] bit_depth = 8 pins the baseline; "auto" asks for 10 first.
+	std::vector<uint32_t> wanted =
+		config().encode.bit_depth == 8 ? std::vector<uint32_t>{8} : std::vector<uint32_t>{10, 8};
+	uint32_t depth = gdp::negotiate_bit_depth(codec_formats_, codec, wanted);
+	// A declared depth no backend for the codec codes (h264) is skipped
+	// without a log line; one a backend codes but this GPU won't open at
+	// (no Main10 entrypoint) is reported by the factory, and the session
+	// goes on at 8 bits.
+	if (depth > 8 && !codec_supports_bit_depth(gdp::video_codec_from_token(codec), depth)) {
+		depth = 8;
+	}
+	ColorMatrix matrix = session_matrix(codec);
+	if (services.set_session_codec(codec, refine, depth, matrix)) {
+		return true;
+	}
+	if (depth > 8) {
+		WLOG_INFO("gdp: no %u-bit %s encoder opened, trying 8-bit", depth, codec.c_str());
+		return services.set_session_codec(codec, refine, 8, matrix);
+	}
+	return false;
 }
 
 // gdp-spec.md §7.2: resize the output, reopen the
@@ -415,7 +457,7 @@ void GdpSession::handle_resolution_change(const gdp::session::ResolutionChange &
 				width, height, old_width, old_height);
 		} else {
 			services.close_encoder();
-			if (services.set_session_codec(video_codec_, refine)) {
+			if (open_session_encoder(video_codec_, refine)) {
 				WLOG_INFO("gdp: resized output to %ux%u mid-session (was %ux%u)", width, height, old_width,
 					old_height);
 			} else {
@@ -425,7 +467,7 @@ void GdpSession::handle_resolution_change(const gdp::session::ResolutionChange &
 					height, old_width, old_height);
 				host_.request_resize(old_width, old_height);
 				services.close_encoder();
-				if (!services.set_session_codec(video_codec_, refine)) {
+				if (!open_session_encoder(video_codec_, refine)) {
 					WLOG_ERROR("gdp: the %s encoder won't reopen at %ux%u either", video_codec_.c_str(),
 						old_width, old_height);
 					reset_session(static_cast<uint64_t>(gdp::ErrorCode::kNoCommonCodec));
@@ -534,12 +576,27 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 			WLOG_INFO("gdp: not using pyrowave: the session comes through a gateway");
 		}
 	}
+	std::vector<std::string> ten_bit_codecs;
+	for (const auto &format : hello.codec_formats()) {
+		if (std::find(format.bit_depths().begin(), format.bit_depths().end(), 10u) !=
+			format.bit_depths().end()) {
+			ten_bit_codecs.push_back(format.codec());
+		}
+	}
 	negotiation_summary_ = "client offered codecs: " + join(offered_codecs) +
+		"\nclient decodes 10-bit: " + join(ten_bit_codecs) +
 		"\nclient decoders: " + join(to_vector(hello.decoders())) +
 		"\nhost can encode: " + join(SessionServices::supported_video_codecs()) +
 		"\nconnection: " + (hello.via_gateway() ? "via a gateway (pyrowave is never used)" : "direct");
 	video_codec_.clear();
 	capabilities_ = gdp::negotiate_capabilities(to_vector(hello.capabilities()), supported_capabilities());
+	codec_formats_.clear();
+	for (const auto &format : hello.codec_formats()) {
+		gdp::CodecFormat declared;
+		declared.codec = format.codec();
+		declared.bit_depths.assign(format.bit_depths().begin(), format.bit_depths().end());
+		codec_formats_.push_back(std::move(declared));
+	}
 	bool refine = gdp::has_capability(capabilities_, gdp::kCapabilityRefine);
 
 	SessionServices &services = host_.session();
@@ -590,7 +647,7 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 	// closed with the §12 code rather than a SessionReject, so the reason
 	// survives even if a reject message would race the close.
 	for (const std::string &candidate : common) {
-		if (services.set_session_codec(candidate, refine)) {
+		if (open_session_encoder(candidate, refine)) {
 			video_codec_ = candidate;
 			break;
 		}
@@ -602,7 +659,9 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 		reset_session(static_cast<uint64_t>(gdp::ErrorCode::kNoCommonCodec));
 		return false;
 	}
-	WLOG_INFO("gdp: session codec %s (client decoders: %s), capabilities: %s, %s", video_codec_.c_str(),
+	WLOG_INFO("gdp: session codec %s at %u bits, %s (client decoders: %s), capabilities: %s, %s",
+		video_codec_.c_str(), services.session_bit_depth(),
+		session_matrix(video_codec_) == ColorMatrix::Bt709 ? "BT.709" : "BT.601",
 		join(to_vector(hello.decoders())).c_str(), join(capabilities_).c_str(),
 		hello.via_gateway() ? "via gateway" : "direct");
 

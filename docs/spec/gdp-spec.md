@@ -912,6 +912,7 @@ capability is still right.
 | Name | Status | Defined in |
 |---|---|---|
 | `clipboard` | defined | §7.9 |
+| `color` | defined | §7.3 |
 | `refine` | defined | §7.8, §9.5 |
 | `gamepad` | defined | §8.5 |
 | `hid` | defined | §8.6 |
@@ -1118,16 +1119,21 @@ default:
 | `h264`, `h265`, `av1` | BT.601 | limited | BT.709 | sRGB | 8 | 4:2:0 |
 | `pyrowave` | BT.709 | full | BT.709 | sRGB | 8 | 4:2:0 |
 
-The BT.601 matrix for the block-based codecs is a fixed convention of
-this protocol, not signalled in their bitstreams, which is why it is
-written down here; a client MUST apply `color` rather than whatever the
-bitstream's VUI or sequence header says.
+The BT.601 matrix for the block-based codecs is a convention of this
+protocol, which is why it is written down here; a client MUST apply
+`color` rather than whatever the bitstream's VUI or sequence header
+says, should the two ever disagree.
 
 **Colour negotiation.** Matrix and range are arithmetic that any client
-can do, so they are not negotiated: a client MUST apply every value
-defined in this version. Depth, chroma, primaries and transfer depend on
-the client's decoder and display, so the client declares them in
-`SessionHello` (§6.2) and the host chooses within what it declared.
+can do, so they are not declared value by value. A client that offers
+the `color` capability (§6.7) MUST apply every matrix and range defined
+in this version, as `color` states them, from `SessionAccept` and every
+`DisplaysChanged` on. Unless `color` is in effect, the host MUST use the
+codec's default matrix and range from the table above, so that a client
+which assumes them sees the right colours. Depth, chroma, primaries and
+transfer depend on the client's decoder and display, so the client
+declares them in `SessionHello` (§6.2) and the host chooses within what
+it declared.
 
 Every client takes the **baseline**: 8 bits and 4:2:0 in every codec it
 offers, BT.709 primaries and sRGB transfer. A client declares more with:
@@ -1155,8 +1161,13 @@ receives a description outside what it declared MAY end the session with
 A value this version does not define is never sent: a later version that
 adds one adds the declaration that covers it.
 
-*Host behavior:* the reference host converts the sRGB desktop to 8-bit
-4:2:0, the baseline, with the codec's default matrix and range.
+*Host behavior:* the reference host converts the sRGB desktop to 4:2:0,
+limited range, with BT.709 when `color` is in effect and the codec's
+default otherwise, at 10 bits when the client declares 10 for the
+session's codec and its encoder opens at that depth, else at the 8-bit
+baseline. `pyrowave` is full-range BT.709 either way. Every stream also
+states its matrix in-band (the H.264 and H.265 VUI, the AV1 sequence
+header), for decoders that read it.
 
 ### 7.4 Cursor
 
