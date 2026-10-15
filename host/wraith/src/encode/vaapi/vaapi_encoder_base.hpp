@@ -53,6 +53,7 @@ public:
 	bool push_cpu(const uint8_t *data, uint32_t width, uint32_t height, uint32_t stride, int64_t pts_us,
 		const DamageRegion *damage) override;
 	std::vector<uint64_t> supported_import_modifiers(uint32_t drm_format) const override;
+	bool can_import(const DmabufFrame &frame) const override;
 	void request_keyframe() override;
 	void set_bitrate(uint32_t bitrate_bps) override;
 	std::vector<EncodedPacket> poll() override;
@@ -190,28 +191,11 @@ protected:
 	// The DPB surface the last encoded picture was reconstructed into.
 	VASurfaceID last_ref_surface_ = VA_INVALID_ID;
 
-private:
-	struct PendingFrame {
-		VABufferID coded_buf;
-		int64_t pts_us;
-		bool keyframe;
-	};
-
-	bool init_display();
-	bool init_encode_pipeline();
-	bool init_vpp_pipeline();
-	void destroy_surface_pools();
+	// These two are push()'s dmabuf path, protected for
+	// tests/vaapi_import_test.cpp to check what the VPP reads from an import.
 
 	// Imports `frame` as a short-lived RGB VA surface (VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2).
-	VASurfaceID import_rgb_surface(const DmabufFrame &frame);
-
-	// push_cpu()'s upload target: a driver-allocated RGB surface plus the
-	// VAImage used to write host pixels into it. Created on first use and
-	// kept for the life of the encoder (a per-frame create/destroy pair
-	// shows up clearly in frame time at 60fps), so they stay VA_INVALID_ID
-	// on a dmabuf-only session.
-	bool ensure_cpu_upload_surface();
-	void destroy_cpu_upload_surface();
+	VASurfaceID import_rgb_surface(const DmabufFrame &frame) const;
 
 	// VPP-converts `rgb_surface` into the next surface from yuv_surfaces_
 	// and returns it. Blocks (vaSyncSurface) until the conversion completes,
@@ -222,6 +206,36 @@ private:
 	// VA_RT_FORMAT_YUV420_10 + P010.
 	unsigned yuv_rt_format() const;
 	uint32_t yuv_fourcc() const;
+
+private:
+	struct PendingFrame {
+		VABufferID coded_buf;
+		int64_t pts_us;
+		bool keyframe;
+	};
+
+	// How the driver reads an imported linear surface whose pitch isn't a
+	// multiple of 64 (can_import()): probed on first use, then kept. Only
+	// kRight keeps such frames on the zero-copy import; kUnprobed (the
+	// driver refused the probe's import, or the probe couldn't run) is
+	// treated like kWrong, which only costs a read-back.
+	enum class PitchReading { kUnknown, kRight, kWrong, kUnprobed };
+	bool pitch_misread() const;
+	PitchReading probe_pitch_reading() const;
+	mutable PitchReading pitch_reading_ = PitchReading::kUnknown;
+
+	bool init_display();
+	bool init_encode_pipeline();
+	bool init_vpp_pipeline();
+	void destroy_surface_pools();
+
+	// push_cpu()'s upload target: a driver-allocated RGB surface plus the
+	// VAImage used to write host pixels into it. Created on first use and
+	// kept for the life of the encoder (a per-frame create/destroy pair
+	// shows up clearly in frame time at 60fps), so they stay VA_INVALID_ID
+	// on a dmabuf-only session.
+	bool ensure_cpu_upload_surface();
+	void destroy_cpu_upload_surface();
 
 	EncodedPacket drain_coded_buffer(VABufferID coded_buf, bool keyframe, int64_t pts_us);
 
