@@ -623,6 +623,14 @@ bool VaapiEncoderBase::add_rate_control_buffers(ParamBuffers &buffers) {
 		rc->bits_per_second = config_.bitrate_bps;
 		rc->target_percentage = 100;
 		rc->window_size = 1000;
+		// 2 = macroblock-level rate control always off (va.h: 0 default,
+		// 1 on, 2 off). iHD's low-power HEVC encoder has it on by default
+		// and raises QP on blocks it rates as simple -- the dark gradient
+		// of a wallpaper came out as flat stepped squares that no later
+		// frame refined (n100, 2026-10-14). Off, the gradient keeps its
+		// grain, as ffmpeg's hevc_vaapi (which also sends 2) encodes it.
+		// iHD's H.264 encoder and radeonsi don't change with it.
+		rc->rc_flags.bits.mb_rate_control = 2;
 		if (!add_buffer(buffers, VAEncMiscParameterBufferType, (unsigned)misc.size(), misc.data())) {
 			return false;
 		}

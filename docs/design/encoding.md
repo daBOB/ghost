@@ -89,7 +89,13 @@ encoder reading freed memory.
 buffers are re-sent with every IDR, not only after `open()` and
 `set_bitrate()`: radeonsi takes the frame rate from each new sequence
 parameter buffer over the misc buffer's, and otherwise budgets every
-frame for its default rate, overshooting the target.
+frame for its default rate, overshooting the target. Macroblock-level
+rate control is always off (`mb_rate_control` = 2): iHD's low-power
+H.265 encoder has it on by default and raises QP on blocks it rates as
+simple, so the dark gradient of a wallpaper came out as flat stepped
+squares that no later frame refined; off, it keeps its grain, as
+ffmpeg's `hevc_vaapi` (which also sends 2) encodes it. iHD's H.264
+encoder and radeonsi encode the same either way.
 
 **H.264.** SPS and PPS are written by wraith. The SPS carries a VUI with
 the BT.601 studio-range colour description and `bitstream_restriction`
