@@ -315,22 +315,37 @@ bool VaapiEncoderBase::can_import(const DmabufFrame &frame) const {
 }
 
 bool VaapiEncoderBase::pitch_misread() const {
-	if (pitch_misread_ < 0) {
-		pitch_misread_ = probe_pitch_misread() ? 1 : 0;
-		WLOG_INFO("vaapi_encoder: the driver reads a linear import whose pitch isn't a multiple of 64 %s",
-			pitch_misread_ ? "wrongly; such frames are read back" : "correctly; such frames are imported");
+	if (pitch_reading_ == PitchReading::kUnknown) {
+		pitch_reading_ = probe_pitch_reading();
+		switch (pitch_reading_) {
+		case PitchReading::kRight:
+			WLOG_INFO("vaapi_encoder: the driver reads a linear import whose pitch isn't a multiple of 64 "
+					  "correctly; such frames are imported");
+			break;
+		case PitchReading::kWrong:
+			WLOG_INFO("vaapi_encoder: the driver reads a linear import whose pitch isn't a multiple of 64 "
+					  "wrongly; such frames are read back");
+			break;
+		default:
+			// radeonsi, for one, refuses the import outright (its own
+			// linear pitches are 256-byte aligned, so it never sees one
+			// from the compositor).
+			WLOG_INFO("vaapi_encoder: the driver wouldn't import a linear surface whose pitch isn't a "
+					  "multiple of 64 for the probe; such frames are read back");
+			break;
+		}
 	}
-	return pitch_misread_ == 1;
+	return pitch_reading_ != PitchReading::kRight;
 }
 
 // A 136x128 frame (SFC's smallest is 128x128) in a 544-byte pitch, black
 // with a white column at x = 64, converted as push() converts: read at a
 // pitch rounded up to 64, the column moves 8 px left a row. Anything that
-// keeps the answer from being known counts as a misread, which only costs
-// a read-back.
-bool VaapiEncoderBase::probe_pitch_misread() const {
+// keeps the pixels from being checked is kUnprobed, which the caller
+// treats as a misread.
+VaapiEncoderBase::PitchReading VaapiEncoderBase::probe_pitch_reading() const {
 	constexpr uint32_t kWidth = 136, kHeight = 128, kPitch = kWidth * 4, kColumn = 64;
-	bool misread = true;
+	PitchReading reading = PitchReading::kUnprobed;
 	int fd = -1;
 	gbm_device *gbm = nullptr;
 	gbm_bo *bo = nullptr;
@@ -353,6 +368,7 @@ bool VaapiEncoderBase::probe_pitch_misread() const {
 						 GBM_BO_TRANSFER_WRITE, &map_stride, &map_data))
 				   : nullptr;
 	DmabufFrame frame;
+	frame.fd[0] = -1;
 	if (map) {
 		// The buffer as plain bytes: rows kPitch apart, whatever GBM's own.
 		memset(map, 0, (size_t)map_stride * kHeight);
@@ -396,11 +412,12 @@ bool VaapiEncoderBase::probe_pitch_misread() const {
 		if (ok && vaCreateImage(display_, &format, kWidth, kHeight, &image) == VA_STATUS_SUCCESS &&
 			vaGetImage(display_, nv12, 0, 0, kWidth, kHeight, image.image_id) == VA_STATUS_SUCCESS &&
 			vaMapBuffer(display_, image.buf, (void **)&pixels) == VA_STATUS_SUCCESS) {
-			misread = false;
+			bool misread = false;
 			for (uint32_t y = 0; y < kHeight; y++) {
 				const uint8_t *row = pixels + image.offsets[0] + (size_t)y * image.pitches[0];
 				misread |= row[kColumn + 1] < 128 || row[kColumn - 8] >= 128;
 			}
+			reading = misread ? PitchReading::kWrong : PitchReading::kRight;
 			vaUnmapBuffer(display_, image.buf);
 		}
 	}
@@ -413,7 +430,7 @@ bool VaapiEncoderBase::probe_pitch_misread() const {
 	if (rgb != VA_INVALID_ID) {
 		vaDestroySurfaces(display_, &rgb, 1);
 	}
-	if (frame.fd[0] > 0) {
+	if (frame.fd[0] >= 0) {
 		::close(frame.fd[0]);
 	}
 	if (bo) {
@@ -425,7 +442,7 @@ bool VaapiEncoderBase::probe_pitch_misread() const {
 	if (fd >= 0) {
 		::close(fd);
 	}
-	return misread;
+	return reading;
 }
 
 VASurfaceID VaapiEncoderBase::import_rgb_surface(const DmabufFrame &frame) const {

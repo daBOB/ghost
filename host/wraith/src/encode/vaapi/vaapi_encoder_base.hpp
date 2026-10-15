@@ -214,12 +214,15 @@ private:
 		bool keyframe;
 	};
 
-	// Whether the driver misreads an imported linear surface whose pitch
-	// isn't a multiple of 64 (can_import()): probed on first use, then
-	// kept.
+	// How the driver reads an imported linear surface whose pitch isn't a
+	// multiple of 64 (can_import()): probed on first use, then kept. Only
+	// kRight keeps such frames on the zero-copy import; kUnprobed (the
+	// driver refused the probe's import, or the probe couldn't run) is
+	// treated like kWrong, which only costs a read-back.
+	enum class PitchReading { kUnknown, kRight, kWrong, kUnprobed };
 	bool pitch_misread() const;
-	bool probe_pitch_misread() const;
-	mutable int pitch_misread_ = -1; // -1: not asked yet
+	PitchReading probe_pitch_reading() const;
+	mutable PitchReading pitch_reading_ = PitchReading::kUnknown;
 
 	bool init_display();
 	bool init_encode_pipeline();

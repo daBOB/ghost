@@ -209,9 +209,11 @@ least) reads an imported linear surface at its pitch rounded up to 64
 bytes and doesn't fail the import, so mutter's linear buffers at a width
 that isn't a multiple of 16 (`width * 4` bytes a row) came out sheared.
 The first time such a pitch turns up, `can_import()` converts a small
-frame with one to see whether the driver does this; if it does, it turns
-such frames down, and `ScreencastHost` reads them back through
-`DmabufReader` and hands them to `push_cpu()` instead.
+frame with one to see whether the driver does this; if it does, or if the
+driver won't import the probe's frame at all (radeonsi refuses, though
+its own linear pitches are 256-byte aligned so it never sees one from a
+compositor), it turns such frames down, and `ScreencastHost` reads them
+back through `DmabufReader` and hands them to `push_cpu()` instead.
 
 ## NVENC
 
