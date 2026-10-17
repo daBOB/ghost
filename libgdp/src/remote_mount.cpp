@@ -568,6 +568,29 @@ bool RemoteMount::supported() {
 	return true;
 }
 
+bool RemoteMount::available() {
+	if (access("/dev/fuse", R_OK | W_OK) != 0) {
+		return false;
+	}
+	// Where libfuse looks: its own install's bin, then PATH.
+	std::string path = "/usr/bin:/bin";
+	if (const char *env = getenv("PATH")) {
+		path = std::string(env) + ":" + path;
+	}
+	for (size_t start = 0; start <= path.size();) {
+		size_t colon = path.find(':', start);
+		std::string dir = path.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
+		if (!dir.empty() && access((dir + "/fusermount3").c_str(), X_OK) == 0) {
+			return true;
+		}
+		if (colon == std::string::npos) {
+			break;
+		}
+		start = colon + 1;
+	}
+	return false;
+}
+
 namespace {
 
 // fusermount3 -u -z: a mount a crashed process left behind ("Transport
@@ -900,6 +923,9 @@ struct RemoteMount::Impl {};
 RemoteMount::RemoteMount() = default;
 RemoteMount::~RemoteMount() = default;
 bool RemoteMount::supported() {
+	return false;
+}
+bool RemoteMount::available() {
 	return false;
 }
 bool RemoteMount::mount(const std::string &, std::string *error) {

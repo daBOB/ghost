@@ -841,13 +841,16 @@ std::vector<std::string> GdpSession::supported_capabilities() const {
 	// A download directory to put files in, checked as the client attaches.
 	if (!file_directory_.empty()) {
 		supported.push_back(gdp::kCapabilityFile);
+		// Both need the client's files mounted: a client that negotiated
+		// file-clipboard no longer sends its copies as text, so offering it
+		// without a mount would lose them (fuse3 is only recommended).
+		bool mount = ClientFiles::can_mount();
 		// Folders listed and the client's copies taken: with the clipboard
 		// (dropped after negotiation otherwise).
-		if (host_.session().clipboard_available()) {
+		if (mount && host_.session().clipboard_available()) {
 			supported.push_back(gdp::kCapabilityFileClipboard);
 		}
-		// Shared folders need somewhere to mount them.
-		if (config().files.shares && !ClientFiles::mount_directory().empty()) {
+		if (mount && config().files.shares) {
 			supported.push_back(gdp::kCapabilityFileShare);
 		}
 	}

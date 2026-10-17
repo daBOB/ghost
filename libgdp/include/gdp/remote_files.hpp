@@ -60,6 +60,7 @@ public:
 	RemoteFiles &operator=(const RemoteFiles &) = delete;
 
 	static bool supported() { return RemoteMount::supported(); }
+	static bool available() { return RemoteMount::available(); }
 
 	// Mounts at `directory`. False, with why, if it can't.
 	bool start(const std::string &directory, std::string *error);

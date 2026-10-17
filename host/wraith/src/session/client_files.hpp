@@ -40,6 +40,9 @@ public:
 
 	// Where the mount goes; empty without FUSE or a runtime directory.
 	static std::string mount_directory();
+	// Whether the client's files can be mounted here at all (FUSE usable,
+	// a runtime directory): what file-clipboard and file-share need.
+	static bool can_mount();
 	// Removes sidebar entries a wraith that died left behind. Called once at
 	// startup.
 	static void clean_up_after_crash();

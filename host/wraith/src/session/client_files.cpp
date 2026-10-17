@@ -55,6 +55,10 @@ std::string ClientFiles::mount_directory() {
 	return std::string(runtime) + "/ghost/files";
 }
 
+bool ClientFiles::can_mount() {
+	return gdp::RemoteFiles::available() && !mount_directory().empty();
+}
+
 void ClientFiles::clean_up_after_crash() {
 	std::string dir = mount_directory();
 	if (!dir.empty()) {

@@ -160,6 +160,7 @@ int main() {
 		return 0;
 	}
 	CHECK(mount.contains(dir) && mount.contains(dir + "/clip/x") && !mount.contains(dir + "x"));
+	CHECK(gdp::RemoteMount::available()); // it just mounted
 
 	gdp::RemoteMount::Entry clip_e;
 	clip_e.name = "clip";

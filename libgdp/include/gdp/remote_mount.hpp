@@ -59,6 +59,10 @@ public:
 
 	// Whether this build has FUSE at all.
 	static bool supported();
+	// Whether a mount can be made here: FUSE built in, /dev/fuse open to us,
+	// and fusermount3 installed (it does the mounting for a user). What a
+	// side checks before offering what needs a mount.
+	static bool available();
 
 	// Mounts an empty folder at `directory` (created if missing; must be
 	// empty), read-only, unmounted again if this process dies. False, with
