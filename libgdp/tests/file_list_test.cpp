@@ -7,6 +7,7 @@
 #include "gdp/file_list.hpp"
 
 #undef NDEBUG
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -102,6 +103,29 @@ int main() {
 		assert(gdp::resolve_beneath(r, bad).empty());
 	}
 	assert(gdp::resolve_beneath(r + "/a.txt", "").empty()); // not a folder
+
+	// Hidden files: kept unless asked otherwise, and then nothing beneath
+	// a hidden folder either.
+	fs::create_directories(root / ".ssh");
+	std::ofstream(root / ".ssh" / "id_ed25519") << "key";
+	std::ofstream(root / "photos" / ".hidden.jpg") << "h";
+	assert(gdp::hidden_local((root / ".ssh").string()) && !gdp::hidden_local((root / "photos").string()));
+	assert(gdp::resolve_beneath(r, ".ssh/id_ed25519") == (root / ".ssh" / "id_ed25519").string());
+	assert(gdp::resolve_beneath(r, ".ssh/id_ed25519", false).empty());
+	assert(gdp::resolve_beneath(r, ".ssh", false).empty());
+	assert(gdp::resolve_beneath(r, "photos/.hidden.jpg", false).empty());
+	assert(gdp::resolve_beneath(r, "photos/x.jpg", false) == (root / "photos" / "x.jpg").string());
+	auto names_in = [](const std::vector<gdp::LocalEntry> &entries) {
+		std::vector<std::string> out;
+		for (const auto &e : entries) {
+			out.push_back(e.name);
+		}
+		return out;
+	};
+	auto all = names_in(gdp::read_local_folder(r));
+	auto shown = names_in(gdp::read_local_folder(r, false));
+	assert(std::find(all.begin(), all.end(), ".ssh") != all.end());
+	assert(std::find(shown.begin(), shown.end(), ".ssh") == shown.end() && shown.size() == all.size() - 1);
 
 	fs::remove_all(root);
 	printf("file_list_test: all passed\n");

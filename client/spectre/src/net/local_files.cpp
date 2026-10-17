@@ -100,7 +100,7 @@ LocalFiles::List *LocalFiles::use_list(uint64_t list_id) {
 	return &it->second;
 }
 
-uint64_t LocalFiles::add_share(const std::string &path, std::string *name) {
+uint64_t LocalFiles::add_share(const std::string &path, bool include_hidden, std::string *name) {
 	std::error_code ec;
 	std::filesystem::path p = fs_path(path);
 	if (!std::filesystem::is_directory(p, ec)) {
@@ -110,12 +110,14 @@ uint64_t LocalFiles::add_share(const std::string &path, std::string *name) {
 	if (!ec) {
 		p = canonical;
 	}
-	*name = utf8_path(p.filename());
+	if (name->empty()) {
+		*name = utf8_path(p.filename());
+	}
 	if (!gdp::valid_file_name(*name)) {
 		*name = "Shared folder"; // "/" or a name the host would refuse
 	}
 	uint64_t id = next_share_++;
-	shares_[id] = utf8_path(p);
+	shares_[id] = Share{utf8_path(p), include_hidden};
 	return id;
 }
 
@@ -137,7 +139,9 @@ void LocalFiles::answer(const gdp::session::FileFetch &fetch) {
 	std::vector<gdp::session::FileListing> frames;
 	if (fetch.share_id() != 0) {
 		auto share = shares_.find(fetch.share_id());
-		path = share == shares_.end() ? std::string() : gdp::resolve_beneath(share->second, fetch.path());
+		bool include_hidden = share != shares_.end() && share->second.include_hidden;
+		path = share == shares_.end() ? std::string()
+									  : gdp::resolve_beneath(share->second.folder, fetch.path(), include_hidden);
 		gdp::LocalEntry entry;
 		if (path.empty() || !gdp::stat_local(path, &entry, fetch.path().empty())) {
 			refuse(std::move(stream), gdp::session::FILE_ERROR_GONE);
@@ -153,7 +157,7 @@ void LocalFiles::answer(const gdp::session::FileFetch &fetch) {
 			// A shared folder's entries have no index; frames within the budget.
 			gdp::session::FileListing frame;
 			size_t used = 0;
-			for (const gdp::LocalEntry &e : gdp::read_local_folder(path)) {
+			for (const gdp::LocalEntry &e : gdp::read_local_folder(path, include_hidden)) {
 				gdp::session::FileListEntry le = gdp::to_list_entry(e);
 				size_t more = le.ByteSizeLong() + 4;
 				if (frame.files_size() > 0 && used + more > gdp::kFileListBudgetBytes) {

@@ -170,6 +170,12 @@ struct StreamOptions {
 	// Folders to share with the host (spectre -S, repeatable): read-only,
 	// for the session, shown in the host's file manager (file-share).
 	std::vector<std::string> shared_folders;
+	// Share this machine's files too (spectre -F): its drives on Windows,
+	// the home folder and removable drives elsewhere (net/my_folders.hpp).
+	bool share_my_files = false;
+	// Include hidden files in what is shared (spectre -I). Off by default:
+	// they are where passwords and keys live.
+	bool share_hidden = false;
 	// The chord that opens the session menu (spectre -k); main.cpp fills
 	// in kDefaultMenuHotkey when none is given.
 	HotkeyChord menu_hotkey;
@@ -276,6 +282,9 @@ private:
 	// as a list (true) and not as text.
 	bool announce_local_files();
 	void share_folders();
+	// Shares what share_my_files covers now and stops sharing what is gone
+	// (a drive unplugged); every few seconds while connected.
+	void rescan_my_folders();
 	// File transfer (gdp-spec.md §7.12): a file dropped on the window goes
 	// to the host's download folder.
 	void handle_drop_file(const char *path);
@@ -470,6 +479,9 @@ private:
 	// for SDL the same way; and what the local clipboard offers while they
 	// are on it.
 	std::optional<std::vector<std::string>> pending_files_offer_;
+	// share_my_files' shares now, by local path, and when to look again.
+	std::map<std::string, uint64_t> my_shares_;
+	uint64_t next_my_scan_us_ = 0;
 	std::vector<std::string> offered_files_;
 	std::map<std::string, std::string> offered_payloads_;
 	bool own_files_offer_ = false;

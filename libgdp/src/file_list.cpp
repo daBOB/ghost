@@ -9,6 +9,15 @@
 #include <filesystem>
 #include <system_error>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/stat.h>
+#endif
+
 namespace gdp {
 
 namespace fs = std::filesystem;
@@ -101,12 +110,33 @@ bool stat_local(const std::string &path, LocalEntry *entry, bool follow) {
 	return !ec && entry_of(de, entry, follow);
 }
 
-std::vector<LocalEntry> read_local_folder(const std::string &path) {
+bool hidden_local(const std::string &path) {
+	fs::path p = fs_path(path);
+	std::u8string name = p.filename().u8string();
+	if (!name.empty() && name[0] == u8'.') {
+		return true;
+	}
+#ifdef _WIN32
+	DWORD attributes = GetFileAttributesW(p.c_str());
+	return attributes != INVALID_FILE_ATTRIBUTES &&
+		(attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0;
+#elif defined(__APPLE__)
+	struct stat st;
+	return lstat(p.c_str(), &st) == 0 && (st.st_flags & UF_HIDDEN) != 0;
+#else
+	return false;
+#endif
+}
+
+std::vector<LocalEntry> read_local_folder(const std::string &path, bool include_hidden) {
 	std::vector<LocalEntry> entries;
 	std::error_code ec;
 	for (fs::directory_iterator it(fs_path(path), fs::directory_options::skip_permission_denied, ec), end;
 		 !ec && it != end; it.increment(ec)) {
 		LocalEntry entry;
+		if (!include_hidden && hidden_local(utf8_path(it->path()))) {
+			continue;
+		}
 		if (entry_of(*it, &entry)) {
 			entries.push_back(std::move(entry));
 		}
@@ -235,7 +265,7 @@ bool LocalFileList::list_folder(uint32_t index, std::vector<session::FileListing
 	return true;
 }
 
-std::string resolve_beneath(const std::string &root, const std::string &relative) {
+std::string resolve_beneath(const std::string &root, const std::string &relative, bool include_hidden) {
 	fs::path path = fs_path(root);
 	std::error_code ec;
 	fs::file_status st = fs::symlink_status(path, ec);
@@ -252,6 +282,9 @@ std::string resolve_beneath(const std::string &root, const std::string &relative
 		path /= fs_path(part);
 		st = fs::symlink_status(path, ec);
 		if (ec || fs::is_symlink(st) || !(fs::is_directory(st) || fs::is_regular_file(st))) {
+			return "";
+		}
+		if (!include_hidden && hidden_local(utf8_path(path))) {
 			return "";
 		}
 		if (slash == std::string::npos) {

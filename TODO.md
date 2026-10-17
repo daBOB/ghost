@@ -56,7 +56,10 @@ Limitations section.
   client's files on the clipboard (`SetSelection` with file types) isn't.
 - Shared folders (`file-share`) are untested with a real Nautilus and
   Dolphin: that the sidebar entries appear and go while they run, and how
-  their thumbnailers and Baloo treat the mount.
+  their thumbnailers and Baloo treat the mount. spectre `-F` (share my
+  files) and the hidden-file filter are tested on Linux only: the
+  Windows drive list and hidden attribute are compiled (MinGW), not run;
+  macOS's `UF_HIDDEN` and `/Volumes` not even compiled.
 
 ## Client
 

@@ -34,10 +34,16 @@ session::FileListEntry to_list_entry(const LocalEntry &entry);
 // link, and mean what it points at); nothing found inside a folder is.
 bool stat_local(const std::string &path, LocalEntry *entry, bool follow = false);
 
+// Whether the local file or folder at `path` (UTF-8) is hidden the way this
+// platform's file manager hides it: a name starting with '.' everywhere,
+// and also the hidden or system attribute on Windows, UF_HIDDEN on macOS.
+bool hidden_local(const std::string &path);
+
 // What is in the local folder at `path`, sorted by name: regular files and
-// folders with usable names only. Symbolic links are left out, so nothing
-// reached through a list or a share leads outside what the user picked.
-std::vector<LocalEntry> read_local_folder(const std::string &path);
+// folders with usable names only, and no hidden ones unless
+// `include_hidden`. Symbolic links are left out, so nothing reached through
+// a list or a share leads outside what the user picked.
+std::vector<LocalEntry> read_local_folder(const std::string &path, bool include_hidden = true);
 
 class LocalFileList {
 public:
@@ -88,7 +94,8 @@ private:
 // A shared folder's `relative` path (gdp-spec.md §7.12: '/'-separated, each
 // part a valid name, "" for the folder itself) as a local path beneath
 // `root`, or "" if a part breaks the rules or anything on the way is a
-// symbolic link -- nothing a request names may lead outside `root`.
-std::string resolve_beneath(const std::string &root, const std::string &relative);
+// symbolic link -- nothing a request names may lead outside `root` -- or,
+// unless `include_hidden`, is hidden (hidden_local()).
+std::string resolve_beneath(const std::string &root, const std::string &relative, bool include_hidden = true);
 
 } // namespace gdp

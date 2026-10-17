@@ -64,7 +64,14 @@ yet, copying from them is.
 
 `-S folder` (repeatable) shares a folder with the host for the session,
 read-only: it appears in the host's file manager sidebar, labelled
-"(shared by the client)", and goes when you disconnect.
+"(shared by the client)", and goes when you disconnect. `-F` shares your
+files the way Remote Desktop shares drives: every drive on Windows; your
+home folder and the removable drives mounted for you elsewhere, including
+ones plugged in while connected. Hidden files (dotfiles, and anything
+marked hidden on Windows and macOS, like `AppData` and `Library`) are left
+out of every share, neither listed nor readable, unless you add `-I`:
+that is where passwords, keys and browser profiles live. spectre-qt's
+Settings has all three under Files.
 
 ## Trust
 

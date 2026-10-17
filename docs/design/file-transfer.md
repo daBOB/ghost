@@ -187,9 +187,14 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
   (SDL's mime types; Explorer's `CF_HDROP` on Windows), sends them as a
   `FileList` built the same way, and answers `FileFetch` from
   `LocalFiles`, by list and index, with the host's lifetime rule.
-- **Shared folders** (spectre `-S`): `LocalFiles` answers by path,
-  through `gdp::resolve_beneath()` (no empty parts, `.`, `..` or
-  symbolic links on the way). wraith mounts each under
+- **Shared folders** (spectre `-S`, and `-F` for the home folder and
+  removable drives, or every drive on Windows, `my_folders.*`, looked at
+  again every 3 s): `LocalFiles` answers by path, through
+  `gdp::resolve_beneath()` (no empty parts, `.`, `..` or symbolic links
+  on the way, and unless `-I` nothing hidden: `gdp::hidden_local()`, a
+  leading dot, or the hidden or system attribute on Windows, `UF_HIDDEN`
+  on macOS). Never `/`: the user's keys, and full of links and devices a
+  share leaves out anyway. wraith mounts each under
   `$XDG_RUNTIME_DIR/ghost/files/shares/` -- not under `$HOME`, where
   Baloo and backup tools would crawl a remote mount -- and adds a GTK
   bookmark and a KDE Places entry (`file_bookmarks.*`), removed with the

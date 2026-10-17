@@ -22,6 +22,7 @@ extern "C" {
 #include "log.hpp"
 #include "net/clipboard_files.hpp"
 #include "net/lan_link.hpp"
+#include "net/my_folders.hpp"
 #include "session.pb.h"
 
 #include <algorithm>
@@ -351,7 +352,7 @@ bool StreamSession::connect_and_wait_for_accept() {
 	// to raw later, but a capability can't be added after SessionAccept.
 	client_.set_raw_controllers(true);
 	client_.set_microphone(options_.microphone);
-	client_.set_file_share(!options_.shared_folders.empty());
+	client_.set_file_share(!options_.shared_folders.empty() || options_.share_my_files);
 	if (!client_.connect(options_.host, options_.port, options_.token, options_.cert_sha256)) {
 		SLOG_ERROR("spectre: connect() failed locally");
 		return false;
@@ -641,6 +642,9 @@ void StreamSession::main_loop() {
 			mark_ui_dirty();
 		}
 		files_.tick(now_us);
+		if (next_my_scan_us_ != 0 && now_us >= next_my_scan_us_) {
+			rescan_my_folders();
+		}
 		if (follow_due_us_ != 0 && now_us >= follow_due_us_) {
 			follow_due_us_ = 0;
 			follow_window();
@@ -1500,7 +1504,7 @@ bool StreamSession::announce_local_files() {
 }
 
 void StreamSession::share_folders() {
-	if (options_.shared_folders.empty()) {
+	if (options_.shared_folders.empty() && !options_.share_my_files) {
 		return;
 	}
 	if (!client_.file_share_enabled()) {
@@ -1509,13 +1513,47 @@ void StreamSession::share_folders() {
 	}
 	for (const std::string &folder : options_.shared_folders) {
 		std::string name;
-		uint64_t id = local_files_.add_share(folder, &name);
+		uint64_t id = local_files_.add_share(folder, options_.share_hidden, &name);
 		if (!id) {
 			SLOG_ERROR("files: can't share %s: not a folder", folder.c_str());
 			continue;
 		}
 		client_.send_file_share(id, name, false);
 		SLOG_INFO("files: sharing %s with the host as \"%s\"", folder.c_str(), name.c_str());
+	}
+	if (options_.share_my_files) {
+		rescan_my_folders();
+	}
+}
+
+void StreamSession::rescan_my_folders() {
+	constexpr uint64_t kRescanUs = 3000000;
+	next_my_scan_us_ = gdp::monotonic_us() + kRescanUs;
+	std::vector<MyFolder> now = my_folders();
+	std::set<std::string> present;
+	for (const MyFolder &folder : now) {
+		present.insert(folder.path);
+		if (my_shares_.count(folder.path)) {
+			continue;
+		}
+		std::string name = folder.name;
+		uint64_t id = local_files_.add_share(folder.path, options_.share_hidden, &name);
+		if (!id) {
+			continue;
+		}
+		my_shares_[folder.path] = id;
+		client_.send_file_share(id, name, false);
+		SLOG_INFO("files: sharing %s with the host as \"%s\"", folder.path.c_str(), name.c_str());
+	}
+	for (auto it = my_shares_.begin(); it != my_shares_.end();) {
+		if (present.count(it->first)) {
+			++it;
+			continue;
+		}
+		local_files_.remove_share(it->second);
+		client_.send_file_share(it->second, "", true);
+		SLOG_INFO("files: %s is gone; no longer shared", it->first.c_str());
+		it = my_shares_.erase(it);
 	}
 }
 

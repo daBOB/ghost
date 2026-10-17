@@ -133,6 +133,7 @@ add_executable(spectre
   src/net/clipboard_files.cpp
   src/net/file_transfers.cpp
   src/net/local_files.cpp
+  src/net/my_folders.cpp
   src/net/session_client.cpp
   src/net/lan_link.cpp
   src/decode/decoder.cpp

@@ -8,6 +8,8 @@
 
 #include "gdp/video_codec.hpp"
 
+#include <QDir>
+#include <QFileDialog>
 #include <QSettings>
 
 namespace {
@@ -37,6 +39,11 @@ constexpr auto kPyrowaveKey = "spectre/allow_pyrowave";
 constexpr auto kFollowWindowKey = "spectre/follow_window";
 constexpr auto kViewKey = "spectre/view";
 constexpr auto kLosslessKey = "spectre/lossless_refinement";
+constexpr auto kShareMyFilesKey = "spectre/share_my_files";
+constexpr auto kSharedFoldersKey = "spectre/shared_folders";
+constexpr auto kShareHiddenKey = "spectre/share_hidden";
+// The dialog's own state, not a spectre setting.
+constexpr auto kTabKey = "settings_dialog/tab";
 
 } // namespace
 
@@ -58,6 +65,9 @@ SpectreSettings load_settings() {
 	settings.allow_pyrowave = store.value(kPyrowaveKey, true).toBool();
 	settings.follow_window = store.value(kFollowWindowKey, false).toBool();
 	settings.view = store.value(kViewKey, QString()).toString();
+	settings.share_my_files = store.value(kShareMyFilesKey, false).toBool();
+	settings.shared_folders = store.value(kSharedFoldersKey, QStringList()).toStringList();
+	settings.share_hidden = store.value(kShareHiddenKey, false).toBool();
 	return settings;
 }
 
@@ -76,12 +86,21 @@ void save_settings(const SpectreSettings &settings) {
 	store.setValue(kFollowWindowKey, settings.follow_window);
 	store.setValue(kViewKey, settings.view);
 	store.setValue(kLosslessKey, settings.lossless_refinement);
+	store.setValue(kShareMyFilesKey, settings.share_my_files);
+	store.setValue(kSharedFoldersKey, settings.shared_folders);
+	store.setValue(kShareHiddenKey, settings.share_hidden);
 }
 
 SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWidget *parent)
 	: QDialog(parent), ui(new Ui::SettingsDialog) {
 	ui->setupUi(this);
-	ui->debugGroup->setVisible(debug);
+	if (!debug) {
+		ui->tabs->removeTab(ui->tabs->indexOf(ui->debugTab));
+	}
+	// Back where the dialog was last left.
+	int tab = QSettings().value(kTabKey, 0).toInt();
+	ui->tabs->setCurrentIndex(tab >= 0 && tab < ui->tabs->count() ? tab : 0);
+	connect(ui->tabs, &QTabWidget::currentChanged, this, [](int index) { QSettings().setValue(kTabKey, index); });
 
 	ui->resolutionCombo->addItem(tr("Match this display"), QString());
 	for (const char *resolution : kResolutions) {
@@ -135,6 +154,41 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 	ui->pyrowaveCheck->setChecked(settings.allow_pyrowave);
 	ui->losslessCheck->setChecked(settings.lossless_refinement);
 
+	ui->shareMyFilesCheck->setChecked(settings.share_my_files);
+#if defined(_WIN32)
+	ui->shareMyFilesCheck->setToolTip(
+		tr("Every drive on this PC (fixed, removable, and optical with a disc in it) shows up in the "
+		   "host's file manager for the session, read-only, the way Remote Desktop shares drives."));
+#else
+	ui->shareMyFilesCheck->setToolTip(
+		tr("Your home folder and the removable drives you have mounted show up in the host's file "
+		   "manager for the session, read-only, including drives plugged in while connected. Never "
+		   "the whole filesystem."));
+#endif
+	ui->sharedFoldersList->addItems(settings.shared_folders);
+	ui->sharedFoldersList->setToolTip(
+		tr("Each folder here shows up in the host's file manager for the session, read-only."));
+	ui->shareHiddenCheck->setChecked(settings.share_hidden);
+	connect(ui->addFolderButton, &QPushButton::clicked, this, [this]() {
+		QString folder = QDir::toNativeSeparators(QFileDialog::getExistingDirectory(this, tr("Share a Folder")));
+		if (!folder.isEmpty() && ui->sharedFoldersList->findItems(folder, Qt::MatchExactly).isEmpty()) {
+			ui->sharedFoldersList->addItem(folder);
+		}
+	});
+	connect(ui->removeFolderButton, &QPushButton::clicked, this, [this]() {
+		qDeleteAll(ui->sharedFoldersList->selectedItems());
+	});
+	auto update_share_enabled = [this]() {
+		bool sharing = ui->shareMyFilesCheck->isChecked() || ui->sharedFoldersList->count() > 0;
+		ui->shareHiddenCheck->setEnabled(sharing);
+		ui->removeFolderButton->setEnabled(!ui->sharedFoldersList->selectedItems().isEmpty());
+	};
+	connect(ui->shareMyFilesCheck, &QCheckBox::toggled, this, update_share_enabled);
+	connect(ui->sharedFoldersList->model(), &QAbstractItemModel::rowsInserted, this, update_share_enabled);
+	connect(ui->sharedFoldersList->model(), &QAbstractItemModel::rowsRemoved, this, update_share_enabled);
+	connect(ui->sharedFoldersList, &QListWidget::itemSelectionChanged, this, update_share_enabled);
+	update_share_enabled();
+
 	// "Auto" plus every codec token this build's spectre knows about
 	// (gdp/video_codec.hpp), so the dropdown can never offer a token the
 	// running spectre binary would reject as unrecognized.
@@ -181,5 +235,10 @@ SpectreSettings SettingsDialog::settings() const {
 	settings.microphone = ui->microphoneCheck->isChecked();
 	settings.allow_pyrowave = ui->pyrowaveCheck->isChecked();
 	settings.lossless_refinement = ui->losslessCheck->isChecked();
+	settings.share_my_files = ui->shareMyFilesCheck->isChecked();
+	for (int i = 0; i < ui->sharedFoldersList->count(); i++) {
+		settings.shared_folders << ui->sharedFoldersList->item(i)->text();
+	}
+	settings.share_hidden = ui->shareHiddenCheck->isChecked();
 	return settings;
 }

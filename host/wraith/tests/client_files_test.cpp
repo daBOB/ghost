@@ -132,6 +132,9 @@ int main() {
 	fs::create_directories(shared / "docs");
 	write_file(shared / "docs" / "plan.md", "# plan\n");
 	write_file(shared / "readme.txt", "shared readme\n");
+	fs::create_directories(shared / ".secret");
+	write_file(shared / ".secret" / "key", "private key\n");
+	write_file(shared / ".env", "TOKEN=1\n");
 
 	wl_event_loop *loop = wl_event_loop_create();
 	// Destroyed last, after everything with a source on it.
@@ -215,7 +218,7 @@ int main() {
 	// A shared folder: in the mount and the sidebar, listed when opened,
 	// listed again once stale.
 	std::string name;
-	uint64_t share_id = local.add_share(shared.string(), &name);
+	uint64_t share_id = local.add_share(shared.string(), false, &name);
 	CHECK(share_id != 0 && name == "client-shared");
 	gdp::session::FileShare share;
 	share.set_share_id(share_id);
@@ -230,9 +233,13 @@ int main() {
 
 	std::vector<std::string> first, later;
 	std::string plan;
+	bool hidden_reached = true;
 	std::thread browser([&] {
 		first = names(share_dir);
 		plan = read_file(share_dir / "docs" / "plan.md");
+		// Hidden files are neither listed nor reachable by name.
+		hidden_reached = fs::exists(share_dir / ".env") || fs::exists(share_dir / ".secret" / "key") ||
+			!read_file(share_dir / ".secret" / "key").empty();
 		write_file(shared / "added-later.txt", "new");
 		std::this_thread::sleep_for(std::chrono::milliseconds(5500)); // past the listing's 5 s
 		later = names(share_dir);
@@ -245,6 +252,7 @@ int main() {
 	browser.join();
 	CHECK((first == std::vector<std::string>{"docs", "readme.txt"}));
 	CHECK(plan == "# plan\n");
+	CHECK(!hidden_reached);
 	CHECK((later == std::vector<std::string>{"added-later.txt", "docs", "readme.txt"}));
 
 	// The session ends: unmounted, the sidebar entries gone, the user's own kept.

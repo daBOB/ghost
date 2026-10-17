@@ -43,9 +43,14 @@ public:
 	// Whether the last list sent had files.
 	bool has_list() const { return has_list_; }
 
-	// Shares the folder at `path` (UTF-8): its id, and what the host is told
-	// to call it in `name`; 0 if it isn't a folder.
-	uint64_t add_share(const std::string &path, std::string *name);
+	// Shares the folder at `path` (UTF-8): its id, or 0 if it isn't a
+	// folder. `name` is what the host is told to call it: given, or empty
+	// for the folder's own name, filled in. Unless `include_hidden`, hidden
+	// files and folders in it (gdp::hidden_local()) are neither listed nor
+	// read, whatever path the host asks for.
+	uint64_t add_share(const std::string &path, bool include_hidden, std::string *name);
+	// Stops answering for a share; what is being read from it goes on.
+	void remove_share(uint64_t id) { shares_.erase(id); }
 
 	// Answers `fetch` on a stream of its own.
 	void answer(const gdp::session::FileFetch &fetch);
@@ -81,7 +86,11 @@ private:
 	uint64_t list_id_ = 0;
 	bool has_list_ = false;
 	std::map<uint64_t, List> lists_;
-	std::map<uint64_t, std::string> shares_; // id -> folder
+	struct Share {
+		std::string folder;
+		bool include_hidden = false;
+	};
+	std::map<uint64_t, Share> shares_;
 	uint64_t next_share_ = 1;
 	std::map<uint64_t, std::unique_ptr<Job>> jobs_;
 	uint64_t next_job_ = 1;

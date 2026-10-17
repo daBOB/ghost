@@ -57,6 +57,15 @@ QStringList SpectreSettings::to_args(const QScreen *screen, bool debug) const {
 	if (microphone) {
 		args << "-M";
 	}
+	if (share_my_files) {
+		args << "-F";
+	}
+	for (const QString &folder : shared_folders) {
+		args << "-S" << folder;
+	}
+	if (share_hidden && (share_my_files || !shared_folders.isEmpty())) {
+		args << "-I";
+	}
 	if (!allow_pyrowave) {
 		args << "-W";
 	}

@@ -59,6 +59,15 @@ struct SpectreSettings {
 	// Send this machine's microphone to the host (spectre -M). Off by
 	// default everywhere: nothing records until the user ticks it.
 	bool microphone = false;
+	// Share this machine's files with the host, read-only, for the session
+	// (spectre -F): every drive on Windows, the home folder and removable
+	// drives elsewhere. Off by default.
+	bool share_my_files = false;
+	// More folders to share (spectre -S, one each).
+	QStringList shared_folders;
+	// Include hidden files in what is shared (spectre -I). Off by default:
+	// they are where passwords and keys live.
+	bool share_hidden = false;
 	// "WIDTHxHEIGHT"; empty (the default) for "match this display",
 	// resolved at launch to the physical pixel size of the screen
 	// spectre-qt is on, whether spectre then opens windowed or fullscreen.
