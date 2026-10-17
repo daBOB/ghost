@@ -102,7 +102,7 @@ std::vector<std::string> ClientFiles::add_list(const gdp::session::FileList &lis
 	if (list.files_size() == 0 || !start()) {
 		return {};
 	}
-	std::vector<std::string> paths = files_.add_list(list);
+	std::vector<std::string> paths = files_.add_list(list, true); // only ever sent with file-clipboard
 	WLOG_INFO("files: the client copied %zu file(s)", paths.size());
 	return paths;
 }

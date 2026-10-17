@@ -337,7 +337,7 @@ RemoteMount::Node RemoteFiles::folder(const char *name) {
 	return mount_.add(RemoteMount::kRoot, e);
 }
 
-std::vector<std::string> RemoteFiles::add_list(const session::FileList &list) {
+std::vector<std::string> RemoteFiles::add_list(const session::FileList &list, bool tree) {
 	std::vector<std::string> copied;
 	if (!running() || list.files_size() == 0) {
 		return copied;
@@ -361,6 +361,9 @@ std::vector<std::string> RemoteFiles::add_list(const session::FileList &list) {
 			: parent <= static_cast<uint32_t>(i) ? nodes[parent - 1] : 0;
 		if (!under || !valid_file_name(f.name()) || mount_.child(under, f.name())) {
 			continue; // a parent out of order, a bad name, or a name taken twice
+		}
+		if (f.directory() && !tree) {
+			continue; // a host from before file-clipboard: its folders can't be had
 		}
 		Target t;
 		t.list_id = list.list_id();

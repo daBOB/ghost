@@ -76,9 +76,12 @@ public:
 
 	// A FileList from the other end: its own folder, clip/<list_id>/, with
 	// everything the list describes (folders it leaves unlisted are asked for
-	// when opened). Returns the local paths of what was copied, to offer on
-	// the clipboard; empty for an empty list. Older lists past kKeptLists go.
-	std::vector<std::string> add_list(const session::FileList &list);
+	// when opened). `tree`: file-clipboard is in effect, so a folder's
+	// contents can be had; without it a list can't say what is in a folder,
+	// and folders are left out rather than shown empty. Returns the local
+	// paths of what was copied, to offer on the clipboard; empty for an
+	// empty list. Older lists past kKeptLists go.
+	std::vector<std::string> add_list(const session::FileList &list, bool tree);
 	// A folder the other end shares, as shares/<name>/ (numbered if the name
 	// is taken). Returns its local path.
 	std::string add_share(uint64_t share_id, const std::string &name);

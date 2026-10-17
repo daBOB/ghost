@@ -208,7 +208,7 @@ int main() {
 		}
 	}
 	CHECK(unlisted_many); // 15000 names don't fit the budget
-	std::vector<std::string> copied = files.add_list(list);
+	std::vector<std::string> copied = files.add_list(list, true);
 	CHECK(copied.size() == 2 && copied[0] == (mnt / "clip" / "1" / "project").string());
 	CHECK(files.contains(copied[1]));
 
@@ -238,7 +238,7 @@ int main() {
 	// A new copy: the earlier list is still there to read, the new one too.
 	write_file(src / "second.txt", "second copy\n");
 	auto list2 = sender.set_list({(src / "second.txt").string()}, true);
-	std::vector<std::string> copied2 = files.add_list(list2);
+	std::vector<std::string> copied2 = files.add_list(list2, true);
 	std::atomic<int> step{0};
 	std::string second, again;
 	std::thread reader([&] {
@@ -261,6 +261,13 @@ int main() {
 	CHECK(second == "second copy\n");
 	CHECK(again == "# readme\n");
 	CHECK(spin(5000, [&] { return files.pending_requests() == 0 && sender.active_transfers() == 0; }));
+
+	// A host from before file-clipboard: its list can't say what is in a
+	// folder, so the folder is left out rather than mounted empty.
+	auto flat = sender.set_list({(src / "project").string(), (src / "loose.txt").string()}, false);
+	CHECK(flat.files_size() == 2);
+	std::vector<std::string> copied3 = files.add_list(flat, false);
+	CHECK(copied3.size() == 1 && fs::path(copied3[0]).filename() == "loose.txt");
 
 	files.stop();
 	CHECK(!fs::exists(mnt));

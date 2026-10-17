@@ -1421,7 +1421,7 @@ void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
 		}
 		SLOG_INFO("files: the host's copied files are mounted at %s", dir.c_str());
 	}
-	std::vector<std::string> paths = host_files_.add_list(list);
+	std::vector<std::string> paths = host_files_.add_list(list, client_.file_clipboard_enabled());
 	if (paths.empty()) {
 		// The host's clipboard holds something else (no files). What we
 		// offered stays until something replaces it -- the host's text,
