@@ -264,6 +264,14 @@ public:
 	// to SDL_SetClipboardText, so the SDL_EVENT_CLIPBOARD_UPDATE that call
 	// raises is recognised as our own write rather than a fresh local copy.
 	void note_clipboard_applied(const std::string &utf8) { clipboard_echo_.note_applied(utf8); }
+	// Whether to offer the "file" capability (gdp/file_transfer.hpp); on
+	// unless turned off. Must be called before connect().
+	void set_file_transfer(bool enabled) { offer_file_ = enabled; }
+	// True once SessionAccept put "file" in effect.
+	bool file_enabled() const { return file_enabled_; }
+	// A new "file" stream (gdp-spec.md §7.12) for FileTransfers, or null
+	// unless file_enabled().
+	std::unique_ptr<gdp::Stream> open_file_stream();
 	// Asks wraith to end the desktop session (gdp-spec.md §7.10). No reply:
 	// completion is on_disconnected with wraith's SESSION_ENDED close code.
 	// No-op before SessionAccept.
@@ -379,6 +387,8 @@ private:
 	bool offer_gamepad_ = false;
 	bool offer_hid_ = false;
 	bool offer_refine_ = true;
+	bool offer_file_ = true;
+	bool file_enabled_ = false;
 	uint32_t requested_width_ = 0;
 	uint32_t requested_height_ = 0;
 	gdp::Stream *control_ = nullptr;

@@ -160,8 +160,8 @@ struct GnomeClipboard::Impl {
 		// Whatever was being read belongs to an owner that is gone.
 		impl->owner->cancel_reads();
 		// Nothing to read from our own SetSelection's echo, nor from an
-		// owner offering nothing v1 carries (an image, a file list).
-		impl->pending_mime = session_is_owner ? std::string() : gdp::select_clipboard_mime(mimes);
+		// owner offering nothing the wire carries (an image).
+		impl->pending_mime = session_is_owner ? std::string() : select_mime(mimes);
 		if (!impl->pending_mime.empty() && !impl->read_idle) {
 			// Not now: more changes of the same copy may be queued behind
 			// this one.
@@ -366,8 +366,7 @@ void GnomeClipboard::close() {
 }
 
 void GnomeClipboard::read_pipe(int fd, const std::string &mime) {
-	pipes_.read(fd,
-		[this, mime](std::string raw) { note_local_text(gdp::decode_clipboard_text(mime, raw)); });
+	pipes_.read(fd, [this, mime](std::string raw) { note_local_payload(mime, raw); });
 }
 
 void GnomeClipboard::cancel_reads() {

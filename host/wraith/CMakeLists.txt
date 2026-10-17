@@ -168,6 +168,8 @@ add_executable(wraith
   src/session/path_rate_estimator.cpp
   src/session/leader_host.cpp
   src/session/clipboard_sync.cpp
+  src/session/file_receiver.cpp
+  src/session/file_sender.cpp
   src/session/hid_evdev.cpp
   src/session/gamepad_evdev.cpp
   src/session/gamepad_devices.cpp
@@ -301,6 +303,26 @@ target_include_directories(wraith_report_server_test PRIVATE src "${WRAITH_CONTR
 target_link_libraries(wraith_report_server_test PRIVATE gdp protobuf::libprotobuf PkgConfig::WAYLAND_SERVER)
 target_compile_options(wraith_report_server_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_report_server_test COMMAND wraith_report_server_test)
+
+# File transfer's host end (session/file_receiver.hpp): a real libgdp
+# client sends files over loopback into a private directory.
+add_executable(wraith_file_receiver_test tests/file_receiver_test.cpp src/session/file_receiver.cpp
+  src/util/config.cpp src/util/log.cpp)
+target_include_directories(wraith_file_receiver_test PRIVATE src)
+target_link_libraries(wraith_file_receiver_test PRIVATE gdp PkgConfig::WAYLAND_SERVER PkgConfig::TOMLPLUSPLUS
+  PkgConfig::LIBSYSTEMD Threads::Threads)
+target_compile_options(wraith_file_receiver_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_file_receiver_test COMMAND wraith_file_receiver_test)
+
+# Copied files going to the client (session/file_sender.hpp), and how the
+# clipboard sink tells copied files from text (session/clipboard_sync.hpp).
+add_executable(wraith_file_sender_test tests/file_sender_test.cpp src/session/file_sender.cpp
+  src/session/file_receiver.cpp src/session/clipboard_sync.cpp src/util/config.cpp src/util/log.cpp)
+target_include_directories(wraith_file_sender_test PRIVATE src)
+target_link_libraries(wraith_file_sender_test PRIVATE gdp PkgConfig::WAYLAND_SERVER PkgConfig::TOMLPLUSPLUS
+  PkgConfig::LIBSYSTEMD Threads::Threads)
+target_compile_options(wraith_file_sender_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_file_sender_test COMMAND wraith_file_sender_test)
 
 # The bitrate controller (session/rate_controller.hpp) against synthetic
 # reports. Links gdp for session.proto's NetworkProfile enum.

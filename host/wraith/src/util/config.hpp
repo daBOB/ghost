@@ -130,6 +130,19 @@ struct WraithConfig {
 		// `token` is a gdp codec token ("pyrowave", "av1", "h265", "h264").
 		bool codec_enabled(const std::string &token) const;
 	} encode;
+
+	// [files]: file transfer from the client (gdp-spec.md §7.12,
+	// session/file_receiver.hpp).
+	struct Files {
+		// Offer the "file" capability at all.
+		bool receive = true;
+		// Let the client fetch the files the user copies (a FileList);
+		// false sends their paths as clipboard text instead, as before.
+		bool send = true;
+		// Where received files go; empty is the user's download directory
+		// (file_receive_directory()). A leading "~/" is the home directory.
+		std::string directory;
+	} files;
 };
 
 // The settings in effect: the defaults until a load_config() succeeds.

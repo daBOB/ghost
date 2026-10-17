@@ -122,6 +122,15 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	client_.on_clipboard_text = [this](const std::string &utf8) { on_clipboard_text(utf8); };
 	client_.on_displays_changed = [this](const DisplayInfo &d) { on_displays_changed(d); };
 	client_.on_diagnostics_request = [this] { return diagnostics_text(); };
+	files_.on_uploaded = [this](const std::string &name, const std::string &where) {
+		toast_.show(where.empty() ? "Sent " + name : "Sent " + name + " to " + where, gdp::monotonic_us(),
+			4000000);
+		mark_ui_dirty();
+	};
+	files_.on_failed = [this](const std::string &name, const std::string &why) {
+		toast_.show(name + ": " + why, gdp::monotonic_us(), 5000000);
+		mark_ui_dirty();
+	};
 	// Raw controllers (gdp-spec.md §8.6): the host's requests go to the
 	// slot's worker thread, which replies straight onto the input stream.
 	client_.on_hid_rejected = [this](uint32_t i, const std::string &reason) { on_hid_rejected(i, reason); };
@@ -609,6 +618,7 @@ void StreamSession::main_loop() {
 		if (toast_.expire(now_us)) {
 			mark_ui_dirty();
 		}
+		files_.tick(now_us);
 		if (follow_due_us_ != 0 && now_us >= follow_due_us_) {
 			follow_due_us_ = 0;
 			follow_window();
@@ -803,6 +813,7 @@ void StreamSession::screen_pixel_size(uint32_t *width, uint32_t *height) const {
 void StreamSession::on_disconnected(const std::string &reason) {
 	disconnected_ = true;
 	disconnect_reason_ = reason;
+	files_.cancel_all();
 }
 
 bool StreamSession::on_video_frame(const uint8_t *data, size_t len) {
@@ -1038,6 +1049,7 @@ void StreamSession::handle_event(const SDL_Event &event) {
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 	case SDL_EVENT_MOUSE_BUTTON_UP: handle_mouse_button(event.button); break;
 	case SDL_EVENT_CLIPBOARD_UPDATE: handle_clipboard_update(); break;
+	case SDL_EVENT_DROP_FILE: handle_drop_file(event.drop.data); break;
 	case SDL_EVENT_MOUSE_WHEEL:
 		if (menu_.visible() || pointer_on_toolbar_) {
 			break; // the menu or toolbar has the pointer
@@ -1334,6 +1346,29 @@ void StreamSession::handle_clipboard_update() {
 	// drops it either way.
 	client_.send_clipboard(text);
 	SDL_free(text);
+}
+
+void StreamSession::handle_drop_file(const char *path) {
+	if (!path) {
+		return;
+	}
+	if (!client_.file_enabled()) {
+		toast_.show("This host doesn't take files", gdp::monotonic_us(), 3000000);
+		mark_ui_dirty();
+		return;
+	}
+	std::string error;
+	if (!files_.upload(path, &error)) {
+		std::string name = path;
+		size_t slash = name.find_last_of("/\\");
+		if (slash != std::string::npos) {
+			name.erase(0, slash + 1);
+		}
+		toast_.show(name + ": " + error, gdp::monotonic_us(), 4000000);
+	} else {
+		toast_.show("Sending to the host...", gdp::monotonic_us(), 3000000);
+	}
+	mark_ui_dirty();
 }
 
 void StreamSession::handle_key(const SDL_KeyboardEvent &key) {

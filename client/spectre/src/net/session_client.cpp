@@ -7,6 +7,7 @@
 #include "gdp/clock.hpp"
 #include "gdp/datagram.hpp"
 #include "gdp/error_codes.hpp"
+#include "gdp/file_transfer.hpp"
 #include "gdp/framing.hpp"
 #include "gdp/negotiation.hpp"
 #include "gdp/refine.hpp"
@@ -136,6 +137,9 @@ std::vector<std::string> SessionClient::offered_capabilities() const {
 	}
 	if (offer_microphone_) {
 		offered.push_back(gdp::kCapabilityMicrophone);
+	}
+	if (offer_file_) {
+		offered.push_back(gdp::kCapabilityFile);
 	}
 	return offered;
 }
@@ -398,6 +402,7 @@ bool SessionClient::handle_accept(const gdp::session::ControlEnvelope &env) {
 	gamepad_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityGamepad);
 	hid_enabled_.store(gamepad_enabled_ && gdp::has_capability(session.capabilities, gdp::kCapabilityHid),
 		std::memory_order_release);
+	file_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityFile);
 	microphone_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityMicrophone);
 	if (microphone_enabled_) {
 		// The format is the host's to dictate (gdp-spec.md §6.8); a codec this build
@@ -812,6 +817,13 @@ void SessionClient::handle_clipboard_data(const gdp::session::ClipboardData &cli
 	// may be held until SDL is up), and SDL raises
 	// SDL_EVENT_CLIPBOARD_UPDATE from inside that call.
 	on_clipboard_text(clipboard.data());
+}
+
+std::unique_ptr<gdp::Stream> SessionClient::open_file_stream() {
+	if (!conn_ || !accepted_ || !file_enabled_ || disconnect_reported_) {
+		return nullptr;
+	}
+	return conn_->open_stream();
 }
 
 void SessionClient::send_logout_request() {

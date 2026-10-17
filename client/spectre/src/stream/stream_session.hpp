@@ -19,6 +19,7 @@
 #include "decode/decoder.hpp"
 #include "gdp/gamepad.hpp"
 #include "input/raw_controller.hpp"
+#include "net/file_transfers.hpp"
 #include "net/session_client.hpp"
 #include "present/vulkan_presenter.hpp"
 #include "ui/draw_list.hpp"
@@ -256,6 +257,9 @@ private:
 	// picked up on the next focus gain, which is exactly the moment before
 	// the user pastes into the remote session anyway.
 	void handle_clipboard_update();
+	// File transfer (gdp-spec.md §7.12): a file dropped on the window goes
+	// to the host's download folder.
+	void handle_drop_file(const char *path);
 	// Gamepads (gdp-spec.md §8.5): SDL's gamepad API already
 	// normalizes every controller on every platform to one layout, so
 	// this is the same code on Linux, Windows and macOS. A controller
@@ -406,6 +410,8 @@ private:
 	StreamOptions options_;
 
 	SessionClient client_;
+	// After client_, so its streams go before the connection does.
+	FileTransfers files_{[this] { return client_.open_file_stream(); }};
 	Decoder decoder_;
 	VulkanPresenter presenter_;
 	// wraith omits SessionAccept.audio entirely when its own capture failed

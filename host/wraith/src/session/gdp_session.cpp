@@ -12,6 +12,7 @@
 #include "gdp/clipboard.hpp"
 #include "gdp/datagram.hpp"
 #include "gdp/error_codes.hpp"
+#include "gdp/file_transfer.hpp"
 #include "gdp/framing.hpp"
 #include "gdp/negotiation.hpp"
 #include "gdp/refine.hpp"
@@ -155,6 +156,11 @@ void GdpSession::dispatch() {
 // invoking it, so destroying the Peer (and its Connection) from inside one
 // is fine too. reject_pending()/remove_pending() rely on the same contract.
 void GdpSession::reset_session(uint64_t error_code) {
+	// Partial files go with the client that was sending them.
+	files_close_.cancel();
+	file_sender_.reset();
+	files_.reset();
+	last_list_empty_ = true;
 	if (active_) {
 		active_->conn->close(error_code);
 		active_.reset();
@@ -589,6 +595,7 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 		"\nhost can encode: " + join(SessionServices::supported_video_codecs()) +
 		"\nconnection: " + (hello.via_gateway() ? "via a gateway (pyrowave is never used)" : "direct");
 	video_codec_.clear();
+	file_directory_ = file_receive_directory();
 	capabilities_ = gdp::negotiate_capabilities(to_vector(hello.capabilities()), supported_capabilities());
 	codec_formats_.clear();
 	for (const auto &format : hello.codec_formats()) {
@@ -757,6 +764,7 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 	// once it knows the capability is in effect, and the initial push
 	// below is an ordinary ClipboardData.
 	start_clipboard_sync();
+	start_file_receiver();
 	return true;
 }
 
@@ -808,7 +816,69 @@ std::vector<std::string> GdpSession::supported_capabilities() const {
 	if (host_.session().microphone()) {
 		supported.push_back(gdp::kCapabilityMicrophone);
 	}
+	// A download directory to put files in, checked as the client attaches.
+	if (!file_directory_.empty()) {
+		supported.push_back(gdp::kCapabilityFile);
+	}
 	return supported;
+}
+
+void GdpSession::start_file_receiver() {
+	if (!gdp::has_capability(capabilities_, gdp::kCapabilityFile)) {
+		return;
+	}
+	files_ = std::make_unique<FileReceiver>(host_.event_loop(), file_directory_, [this](uint64_t error_code) {
+		files_close_.schedule(host_.event_loop(), [this, error_code] { reset_session(error_code); });
+	});
+	active_->conn->on_stream = [this](std::unique_ptr<gdp::Stream> stream) {
+		if (files_) {
+			files_->add_stream(std::move(stream));
+		} else {
+			stream->reset(static_cast<uint64_t>(gdp::ErrorCode::kUnsupported));
+		}
+	};
+	active_->conn->allow_streams(gdp::kFileStreamsAtOnce);
+	WLOG_INFO("gdp: files from the client go to %s", file_directory_.c_str());
+	// The files the user copies are clipboard content (gdp-spec.md §7.12):
+	// listed only to a client that syncs the clipboard too.
+	if (config().files.send && gdp::has_capability(capabilities_, gdp::kCapabilityClipboard)) {
+		file_sender_ = std::make_unique<FileSender>(
+			host_.event_loop(), [this] { return active_ ? active_->conn->rtt_us() : 0u; },
+			[this] { return send_queue_clear(); });
+		files_->on_request = [this](std::unique_ptr<gdp::Stream> stream,
+								 const gdp::session::FileRequest &request) {
+			if (file_sender_) {
+				file_sender_->serve(std::move(stream), request);
+			}
+		};
+		hook_copied_files();
+	}
+}
+
+void GdpSession::hook_copied_files() {
+	ClipboardSink *clipboard = host_.session().clipboard();
+	if (!clipboard || !file_sender_) {
+		return;
+	}
+	clipboard->on_local_files = [this](
+									const std::vector<std::string> &paths) { copied_files_changed(paths); };
+	// Copied before this client attached: listed now (gdp-spec.md §7.12).
+	if (!clipboard->current_files().empty()) {
+		copied_files_changed(clipboard->current_files());
+	}
+}
+
+void GdpSession::copied_files_changed(const std::vector<std::string> &paths) {
+	if (!authenticated_ || !file_sender_) {
+		return;
+	}
+	if (paths.empty() && last_list_empty_) {
+		return; // nothing listed, nothing to take back
+	}
+	gdp::session::ControlEnvelope env;
+	*env.mutable_file_list() = file_sender_->set_list(paths);
+	last_list_empty_ = env.file_list().files_size() == 0;
+	send_control(env);
 }
 
 void GdpSession::clipboard_sink_changed() {
@@ -816,6 +886,7 @@ void GdpSession::clipboard_sink_changed() {
 		return;
 	}
 	start_clipboard_sync();
+	hook_copied_files();
 }
 
 void GdpSession::start_clipboard_sync() {
@@ -847,6 +918,7 @@ void GdpSession::start_clipboard_sync() {
 void GdpSession::stop_clipboard_sync() {
 	if (ClipboardSink *clipboard = host_.session().clipboard()) {
 		clipboard->on_local_change = nullptr;
+		clipboard->on_local_files = nullptr;
 	}
 }
 
