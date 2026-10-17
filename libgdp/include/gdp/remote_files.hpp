@@ -26,6 +26,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace gdp {
@@ -96,6 +97,7 @@ public:
 
 	// For tests and logs.
 	size_t pending_requests() const { return requests_.size(); }
+	size_t keys() const { return targets_.size(); }
 	RemoteMount &mount() { return mount_; }
 
 private:
@@ -107,7 +109,12 @@ private:
 	// Gives `n` bytes of request `req`'s stream their credit back, less
 	// what was given back already for bytes that came with its opening frame.
 	void give_back(Request &req, size_t n);
+	// The key for `target`: the one it already has, so listing a folder
+	// again (a shared folder, every few seconds) keeps its entries' keys.
 	uint64_t key_for(const Target &target);
+	// Forgets the keys of list `list_id`'s entries, or (list_id 0) of
+	// shared folder `share_id`'s.
+	void forget_keys(uint64_t list_id, uint64_t share_id);
 	RemoteMount::Entry entry_for(const session::FileListEntry &e, const Target &target, bool in_share);
 	RemoteMount::Node folder(const char *name);
 
@@ -117,11 +124,12 @@ private:
 	std::map<uint64_t, uint64_t> by_range_; // mount range -> request
 	uint64_t next_request_ = 1;
 	std::map<uint64_t, Target> targets_; // mount entry key -> what it is
+	// What it is -> its key: (list_id, index, share_id, path).
+	std::map<std::tuple<uint64_t, uint32_t, uint64_t, std::string>, uint64_t> keys_;
 	uint64_t next_key_ = 1;
 	struct KeptList {
 		uint64_t list_id;
 		RemoteMount::Node node;
-		std::vector<uint64_t> keys;
 	};
 	std::vector<KeptList> lists_; // oldest first
 	std::map<uint64_t, RemoteMount::Node> shares_;

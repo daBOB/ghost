@@ -269,6 +269,17 @@ int main() {
 	std::vector<std::string> copied3 = files.add_list(flat, false);
 	CHECK(copied3.size() == 1 && fs::path(copied3[0]).filename() == "loose.txt");
 
+	// Lists past the newest kKeptLists go, and the keys of what was in them
+	// (the 15000 listed on request included) with them.
+	CHECK(files.keys() > 15000);
+	for (int i = 0; i < (int)gdp::RemoteFiles::kKeptLists; i++) {
+		files.add_list(sender.set_list({(src / "loose.txt").string()}, true), true);
+	}
+	CHECK(files.keys() == gdp::RemoteFiles::kKeptLists);
+	// (The tree, not the mount: this thread serves it.)
+	auto clip = files.mount().child(gdp::RemoteMount::kRoot, "clip");
+	CHECK(clip && !files.mount().child(clip, "1") && files.mount().child(clip, "8"));
+
 	files.stop();
 	CHECK(!fs::exists(mnt));
 	conn.reset();

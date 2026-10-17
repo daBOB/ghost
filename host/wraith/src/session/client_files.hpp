@@ -55,6 +55,8 @@ public:
 
 	bool contains(const std::string &path) const { return files_.contains(path); }
 	bool running() const { return files_.running(); }
+	// For tests and logs.
+	const gdp::RemoteFiles &files() const { return files_; }
 
 private:
 	bool start();

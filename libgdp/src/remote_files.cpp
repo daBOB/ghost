@@ -114,6 +114,7 @@ void RemoteFiles::stop() {
 	by_range_.clear();
 	mount_.unmount();
 	targets_.clear();
+	keys_.clear();
 	lists_.clear();
 	shares_.clear();
 }
@@ -307,9 +308,23 @@ void RemoteFiles::finish(uint64_t id, int error) {
 }
 
 uint64_t RemoteFiles::key_for(const Target &target) {
-	uint64_t key = next_key_++;
-	targets_[key] = target;
-	return key;
+	auto [it, added] = keys_.try_emplace({target.list_id, target.index, target.share_id, target.path}, next_key_);
+	if (added) {
+		targets_[next_key_++] = target;
+	}
+	return it->second;
+}
+
+void RemoteFiles::forget_keys(uint64_t list_id, uint64_t share_id) {
+	for (auto it = keys_.begin(); it != keys_.end();) {
+		const auto &[list, index, share, path] = it->first;
+		if (list == list_id && share == share_id) {
+			targets_.erase(it->second);
+			it = keys_.erase(it);
+		} else {
+			++it;
+		}
+	}
 }
 
 RemoteMount::Entry RemoteFiles::entry_for(const session::FileListEntry &e, const Target &target, bool in_share) {
@@ -350,7 +365,7 @@ std::vector<std::string> RemoteFiles::add_list(const session::FileList &list, bo
 	if (mount_.child(clip, e.name)) {
 		return copied; // the same list again
 	}
-	KeptList kept{list.list_id(), mount_.add(clip, e), {}};
+	KeptList kept{list.list_id(), mount_.add(clip, e)};
 	// Entries come parents first (§7.12), so a parent's node is always made
 	// before its children's.
 	std::vector<RemoteMount::Node> nodes(static_cast<size_t>(list.files_size()), 0);
@@ -368,9 +383,7 @@ std::vector<std::string> RemoteFiles::add_list(const session::FileList &list, bo
 		Target t;
 		t.list_id = list.list_id();
 		t.index = static_cast<uint32_t>(i);
-		RemoteMount::Entry entry = entry_for(f, t, false);
-		kept.keys.push_back(entry.key);
-		nodes[i] = mount_.add(under, entry);
+		nodes[i] = mount_.add(under, entry_for(f, t, false));
 		if (parent == 0 && nodes[i]) {
 			copied.push_back(mount_.path_of(nodes[i]));
 		}
@@ -378,9 +391,7 @@ std::vector<std::string> RemoteFiles::add_list(const session::FileList &list, bo
 	lists_.push_back(std::move(kept));
 	while (lists_.size() > kKeptLists) {
 		mount_.remove(lists_.front().node);
-		for (uint64_t key : lists_.front().keys) {
-			targets_.erase(key);
-		}
+		forget_keys(lists_.front().list_id, 0);
 		lists_.erase(lists_.begin());
 	}
 	return copied;
@@ -412,6 +423,7 @@ void RemoteFiles::remove_share(uint64_t share_id) {
 		return;
 	}
 	mount_.remove(it->second);
+	forget_keys(0, share_id);
 	shares_.erase(it);
 }
 

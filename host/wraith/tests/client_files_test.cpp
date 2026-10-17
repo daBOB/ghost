@@ -254,6 +254,17 @@ int main() {
 	CHECK(plan == "# plan\n");
 	CHECK(!hidden_reached);
 	CHECK((later == std::vector<std::string>{"added-later.txt", "docs", "readme.txt"}));
+	// Listing the share again kept its entries' keys: the copy's 6, the
+	// share itself, docs, readme.txt, docs/plan.md and added-later.txt.
+	CHECK(client_files->files().keys() == 11);
+
+	// No longer shared: gone from the sidebar and the keys.
+	gdp::session::FileShare unshare;
+	unshare.set_share_id(share_id);
+	unshare.set_removed(true);
+	client_files->share(unshare);
+	CHECK(read_file(wraith::gtk_bookmarks_path()).find("client-shared") == std::string::npos);
+	CHECK(client_files->files().keys() == 6);
 
 	// The session ends: unmounted, the sidebar entries gone, the user's own kept.
 	client_files.reset();
