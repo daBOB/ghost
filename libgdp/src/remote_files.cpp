@@ -60,7 +60,7 @@ RemoteFiles::RemoteFiles(Requester requester) : requester_(std::move(requester))
 			mount_.range_end(range, ENOENT);
 			return;
 		}
-		by_range_[range] = request(it->second, offset, false, range, 0);
+		request(it->second, offset, false, range, 0);
 	};
 	mount_.on_close_range = [this](uint64_t range) {
 		auto it = by_range_.find(range);
@@ -119,7 +119,7 @@ void RemoteFiles::stop() {
 	shares_.clear();
 }
 
-uint64_t RemoteFiles::request(const Target &target, uint64_t offset, bool listing, uint64_t range,
+void RemoteFiles::request(const Target &target, uint64_t offset, bool listing, uint64_t range,
 	RemoteMount::Node folder) {
 	uint64_t id = next_request_++;
 	auto req = std::make_unique<Request>();
@@ -130,8 +130,10 @@ uint64_t RemoteFiles::request(const Target &target, uint64_t offset, bool listin
 	req->offset = offset;
 	req->deadline_us = monotonic_us() + kFileReplyTimeoutMs * 1000ull;
 	requests_[id] = std::move(req);
+	if (range) {
+		by_range_[range] = id; // before asking: a request can fail at once
+	}
 	requester_(id, target, offset, listing);
-	return id;
 }
 
 void RemoteFiles::tick(uint64_t now_us) {

@@ -117,6 +117,11 @@ int main() {
 	fs::create_directories(dir / "data");
 	setenv("XDG_RUNTIME_DIR", (dir / "run").c_str(), 1);
 	setenv("XDG_CONFIG_HOME", (dir / "config").c_str(), 1);
+	// GTK's bookmarks a link into the user's dotfiles: written through, kept a link.
+	fs::create_directories(dir / "config" / "gtk-3.0");
+	fs::create_directories(dir / "dotfiles");
+	write_file(dir / "dotfiles" / "bookmarks", "file:///home/u/Music\n");
+	fs::create_symlink(dir / "dotfiles" / "bookmarks", dir / "config" / "gtk-3.0" / "bookmarks");
 	setenv("XDG_DATA_HOME", (dir / "data").c_str(), 1);
 	write_file(dir / "data" / "user-places.xbel",
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xbel>\n <bookmark href=\"file:///home/u\">\n  "
@@ -270,6 +275,8 @@ int main() {
 	client_files.reset();
 	CHECK(!fs::exists(mnt));
 	CHECK(read_file(wraith::gtk_bookmarks_path()).find("client-shared") == std::string::npos);
+	CHECK(fs::is_symlink(wraith::gtk_bookmarks_path()));
+	CHECK(read_file(dir / "dotfiles" / "bookmarks") == "file:///home/u/Music\n");
 	xbel = read_file(wraith::kde_places_path());
 	CHECK(xbel.find("client-shared") == std::string::npos && xbel.find("file:///home/u") != std::string::npos);
 

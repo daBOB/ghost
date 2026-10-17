@@ -46,8 +46,12 @@ bool read_file(const std::string &path, std::string *out) {
 }
 
 // Written beside it and renamed over it, so a reader never sees half a file.
-void write_file(const std::string &path, const std::string &content) {
+// A link (a dotfiles manager's) is followed: the file it leads to is
+// replaced, and the link stays.
+void write_file(const std::string &link_or_path, const std::string &content) {
 	std::error_code ec;
+	std::filesystem::path real = std::filesystem::weakly_canonical(link_or_path, ec);
+	const std::string path = ec ? link_or_path : real.string();
 	std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
 	std::string tmp = path + ".ghost-" + std::to_string(getpid());
 	{

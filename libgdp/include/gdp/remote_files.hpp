@@ -102,7 +102,7 @@ public:
 
 private:
 	struct Request;
-	uint64_t request(const Target &target, uint64_t offset, bool listing, uint64_t range, RemoteMount::Node folder);
+	void request(const Target &target, uint64_t offset, bool listing, uint64_t range, RemoteMount::Node folder);
 	void handle_data(uint64_t id, const uint8_t *data, size_t len);
 	void handle_fin(uint64_t id);
 	void finish(uint64_t id, int error);

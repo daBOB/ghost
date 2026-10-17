@@ -610,16 +610,16 @@ void RemoteMount::unmount() {
 	if (!i.se) {
 		return;
 	}
-	i.fail_all();
+	// FUSE's thread first, so nothing more comes in; then every request it
+	// handed over is answered, those that came while it stopped included.
 	uint64_t one = 1;
 	ssize_t ignored = write(i.stop_fd, &one, sizeof(one));
 	(void)ignored;
 	i.loop.join();
+	i.fail_all();
 	fuse_session_unmount(i.se);
 	fuse_session_destroy(i.se);
 	i.se = nullptr;
-	// Requests that came in while stopping: their answers would go nowhere.
-	i.ops.clear();
 	close(i.wake_fd);
 	close(i.stop_fd);
 	i.wake_fd = i.stop_fd = -1;
