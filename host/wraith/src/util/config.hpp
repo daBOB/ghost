@@ -142,6 +142,11 @@ struct WraithConfig {
 		// Where received files go; empty is the user's download directory
 		// (file_receive_directory()). A leading "~/" is the home directory.
 		std::string directory;
+		// Take the folders a client shares (file-share): mounted read-only
+		// for the session (session/client_files.hpp).
+		bool shares = true;
+		// Give each shared folder a sidebar entry in Nautilus and Dolphin.
+		bool bookmarks = true;
 	} files;
 };
 

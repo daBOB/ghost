@@ -80,7 +80,10 @@ add_library(gdp STATIC
   src/error_codes.cpp
   src/negotiation.cpp
   src/clipboard.cpp
+  src/file_list.cpp
   src/file_transfer.cpp
+  src/remote_files.cpp
+  src/remote_mount.cpp
   src/video_codec.cpp
   src/refine.cpp
   src/video_reassembler.cpp
@@ -111,6 +114,19 @@ target_link_libraries(gdp
     ${GDP_ZSTD_TARGET}
     ${GDP_QUIC_TARGETS}
 )
+# FUSE for RemoteMount (include/gdp/remote_mount.hpp): optional, Linux only.
+# GDP_HAVE_FUSE is public so wraith and spectre know whether they can mount.
+if(GHOST_ENABLE_FUSE AND NOT GDP_DEPS_FROM_VCPKG)
+  pkg_check_modules(FUSE3 IMPORTED_TARGET fuse3>=3.12)
+  if(FUSE3_FOUND)
+    target_compile_definitions(gdp PUBLIC GDP_HAVE_FUSE=1)
+    target_link_libraries(gdp PRIVATE PkgConfig::FUSE3)
+    message(STATUS "libgdp: FUSE mounts on (libfuse3 ${FUSE3_VERSION})")
+  else()
+    message(STATUS "libgdp: no libfuse3 >= 3.12, so no FUSE mounts (apt install libfuse3-dev)")
+  endif()
+endif()
+
 if(MSVC)
   target_compile_options(gdp PRIVATE /W4)
 else()
@@ -148,6 +164,16 @@ add_test(NAME gdp_clipboard_test COMMAND gdp_clipboard_test)
 add_executable(gdp_file_transfer_test tests/file_transfer_test.cpp)
 target_link_libraries(gdp_file_transfer_test PRIVATE gdp)
 add_test(NAME gdp_file_transfer_test COMMAND gdp_file_transfer_test)
+
+add_executable(gdp_file_list_test tests/file_list_test.cpp)
+target_link_libraries(gdp_file_list_test PRIVATE gdp)
+add_test(NAME gdp_file_list_test COMMAND gdp_file_list_test)
+
+# A real FUSE mount, read from another thread; passes (skipped) where FUSE
+# isn't built or /dev/fuse can't be opened.
+add_executable(gdp_remote_mount_test tests/remote_mount_test.cpp)
+target_link_libraries(gdp_remote_mount_test PRIVATE gdp Threads::Threads)
+add_test(NAME gdp_remote_mount_test COMMAND gdp_remote_mount_test)
 
 add_executable(gdp_refine_test tests/refine_test.cpp)
 target_link_libraries(gdp_refine_test PRIVATE gdp)

@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The host's end of copied files going to the client (gdp-spec.md §7.12):
-// the FileList of what the user copied, and each file (or range of one)
-// the viewer asks for by its index in a list still kept: the latest, and
-// up to kKeptLists earlier ones for kKeptListUs after each was replaced,
-// so a paste still reading survives a new copy.
+// the FileList of what the user copied (with file-clipboard, what is in its
+// folders too, and listings of the rest on request), and each file (or
+// range of one) the viewer asks for by its index in a list still kept: the
+// latest, and up to kKeptLists earlier ones until kKeptListUs after each was
+// replaced or last read from, so a paste still reading survives a new copy.
 //
 // Files are read by a thread of its own, like FileReceiver's writes, so a
 // slow disk never stalls the event loop that encodes the desktop. File
@@ -15,6 +16,7 @@
 // while the video's own send queue has a backlog.
 #pragma once
 
+#include "gdp/file_list.hpp"
 #include "gdp/transport.hpp"
 #include "session.pb.h"
 #include "util/event_source.hpp"
@@ -59,7 +61,7 @@ private:
 class FileSender {
 public:
 	// Earlier lists still answered, and for how long after each was
-	// replaced.
+	// replaced or last read from, whichever is later.
 	static constexpr size_t kKeptLists = 4;
 	static constexpr uint64_t kKeptListUs = 10ull * 60 * 1000000;
 
@@ -75,13 +77,17 @@ public:
 	FileSender &operator=(const FileSender &) = delete;
 
 	// The clipboard now holds `paths` (none: it no longer holds files).
-	// Returns the FileList to send. The list it replaces is kept a while
-	// (kKeptLists, kKeptListUs).
-	gdp::session::FileList set_list(const std::vector<std::string> &paths);
+	// Returns the FileList to send, with folder contents when `tree`
+	// (file-clipboard). The list it replaces is kept a while (kKeptLists,
+	// kKeptListUs).
+	gdp::session::FileList set_list(const std::vector<std::string> &paths, bool tree = false);
 
 	// A "file" stream whose FileOpen is `request` (FileReceiver hands
 	// them over): answers it, and sends the file if it can.
 	void serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileRequest &request);
+	// The same for a FileListingRequest (file-clipboard): the folder's
+	// contents, in as many FileListing frames as they take, then FIN.
+	void serve_listing(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileListingRequest &request);
 
 	size_t active_transfers() const { return transfers_.size(); }
 	const FileWindow &window() const { return window_; }
@@ -129,17 +135,19 @@ private:
 	void reader_main();
 	// Forgets the earlier lists past kKeptLists or kKeptListUs.
 	void expire_lists(uint64_t now_us);
+	struct List;
+	// A list still kept, marked as read from now; null if gone.
+	List *use_list(uint64_t list_id);
 
 	struct wl_event_loop *loop_;
 	std::function<uint32_t()> rtt_us_;
 	std::function<bool()> video_queue_clear_;
 
-	// A list the client may still fetch from: each entry's path and
-	// listing.
+	// A list the client may still fetch from.
 	struct List {
-		std::vector<std::string> paths;
-		gdp::session::FileList listing;
-		uint64_t replaced_us = 0; // 0 while it is the latest
+		gdp::LocalFileList files;
+		uint64_t replaced_us = 0;  // 0 while it is the latest
+		uint64_t last_used_us = 0; // the last request against it
 	};
 	std::function<uint64_t()> now_us_;
 	uint64_t list_id_ = 0; // the latest

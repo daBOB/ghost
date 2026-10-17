@@ -57,7 +57,7 @@ jobs:
             libdrm-dev libva-dev libgbm-dev libegl-dev libgles-dev libx264-dev libzstd-dev \
             libtomlplusplus-dev \
             libpipewire-0.3-dev libopus-dev \
-            libei-dev libsystemd-dev \
+            libei-dev libsystemd-dev libfuse3-dev \
             libsdl3-dev libavcodec-dev libavutil-dev libvulkan-dev glslang-tools \
             qt6-base-dev libpam0g-dev
 

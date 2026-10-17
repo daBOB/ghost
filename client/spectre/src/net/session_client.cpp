@@ -140,6 +140,10 @@ std::vector<std::string> SessionClient::offered_capabilities() const {
 	}
 	if (offer_file_) {
 		offered.push_back(gdp::kCapabilityFile);
+		offered.push_back(gdp::kCapabilityFileClipboard);
+		if (offer_file_share_) {
+			offered.push_back(gdp::kCapabilityFileShare);
+		}
 	}
 	return offered;
 }
@@ -333,6 +337,16 @@ void SessionClient::handle_control_data(const uint8_t *data, size_t len) {
 			}
 		} else if (env.has_clipboard()) {
 			handle_clipboard_data(env.clipboard());
+		} else if (env.has_file_list()) {
+			// Clipboard content: dropped, like ClipboardData, unless the
+			// session takes it (§7.12).
+			if (file_enabled_ && clipboard_enabled_ && on_file_list) {
+				on_file_list(env.file_list());
+			}
+		} else if (env.has_file_fetch()) {
+			if ((file_clipboard_enabled_ || file_share_enabled_) && on_file_fetch) {
+				on_file_fetch(env.file_fetch());
+			}
 		} else if (env.has_network_profile_changed()) {
 			host_network_profile_ = network_profile_name(env.network_profile_changed().profile());
 		} else if (env.has_diagnostics_request()) {
@@ -403,6 +417,10 @@ bool SessionClient::handle_accept(const gdp::session::ControlEnvelope &env) {
 	hid_enabled_.store(gamepad_enabled_ && gdp::has_capability(session.capabilities, gdp::kCapabilityHid),
 		std::memory_order_release);
 	file_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityFile);
+	// Each only with what it builds on (gdp-spec.md §7.12), whatever the host said.
+	file_clipboard_enabled_ = file_enabled_ && clipboard_enabled_ &&
+		gdp::has_capability(session.capabilities, gdp::kCapabilityFileClipboard);
+	file_share_enabled_ = file_enabled_ && gdp::has_capability(session.capabilities, gdp::kCapabilityFileShare);
 	microphone_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityMicrophone);
 	if (microphone_enabled_) {
 		// The format is the host's to dictate (gdp-spec.md §6.8); a codec this build
@@ -817,6 +835,27 @@ void SessionClient::handle_clipboard_data(const gdp::session::ClipboardData &cli
 	// may be held until SDL is up), and SDL raises
 	// SDL_EVENT_CLIPBOARD_UPDATE from inside that call.
 	on_clipboard_text(clipboard.data());
+}
+
+void SessionClient::send_file_list(const gdp::session::FileList &list) {
+	if (!control_ || !accepted_ || !file_clipboard_enabled_) {
+		return;
+	}
+	gdp::session::ControlEnvelope env;
+	*env.mutable_file_list() = list;
+	send_control(env);
+}
+
+void SessionClient::send_file_share(uint64_t share_id, const std::string &name, bool removed) {
+	if (!control_ || !accepted_ || !file_share_enabled_) {
+		return;
+	}
+	gdp::session::ControlEnvelope env;
+	auto *share = env.mutable_file_share();
+	share->set_share_id(share_id);
+	share->set_name(name);
+	share->set_removed(removed);
+	send_control(env);
 }
 
 std::unique_ptr<gdp::Stream> SessionClient::open_file_stream() {

@@ -18,6 +18,7 @@
 #include "gdp/framing.hpp"
 #include "gdp/gamepad.hpp"
 #include "gdp/transport.hpp"
+#include "session/client_files.hpp"
 #include "session/file_receiver.hpp"
 #include "session/file_sender.hpp"
 #include "session/gamepad_devices.hpp"
@@ -258,6 +259,9 @@ private:
 	// from start_file_receiver(), and again when the sink changes.
 	void hook_copied_files();
 	void copied_files_changed(const std::vector<std::string> &paths);
+	// The client's own copied files (file-clipboard): mounted, and put on
+	// the session's clipboard for a paste there.
+	void handle_client_file_list(const gdp::session::FileList &list);
 
 	// The three gamepad input messages (gdp-spec.md §8.5).
 	// Each is a no-op unless the session negotiated "gamepad"; a client
@@ -357,6 +361,11 @@ private:
 	// only after one that wasn't.
 	std::unique_ptr<FileSender> file_sender_;
 	bool last_list_empty_ = true;
+	// file-clipboard: lists carry what is in copied folders.
+	bool file_tree_ = false;
+	// The client's copied files and shared folders, mounted (file-clipboard,
+	// file-share); null unless one is in effect.
+	std::unique_ptr<ClientFiles> client_files_;
 	// The client's forwarded controllers, or null on a host that can't
 	// create them. Per-client, like the clipboard echo state: every slot
 	// is disconnected in reset_session(), so a client going away unplugs

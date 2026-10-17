@@ -130,7 +130,9 @@ add_executable(spectre
   src/main.cpp
   src/log.cpp
   src/prefs.cpp
+  src/net/clipboard_files.cpp
   src/net/file_transfers.cpp
+  src/net/local_files.cpp
   src/net/session_client.cpp
   src/net/lan_link.cpp
   src/decode/decoder.cpp
@@ -191,7 +193,9 @@ else()
   target_compile_definitions(spectre PRIVATE VK_USE_PLATFORM_WIN32_KHR NOMINMAX)
   # dxguid: the D3D11_DECODER_PROFILE_* GUIDs codec_support.cpp probes.
   # iphlpapi: the route and interface lookups of lan_link.cpp.
-  target_link_libraries(spectre PRIVATE d3d11 dxgi dxguid iphlpapi)
+  # shell32: the copied files Explorer puts on the clipboard (CF_HDROP,
+  # clipboard_files.cpp).
+  target_link_libraries(spectre PRIVATE d3d11 dxgi dxguid iphlpapi shell32)
 endif()
 
 if(SPECTRE_FFMPEG_HAS_VULKAN)

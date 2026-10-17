@@ -26,7 +26,8 @@ Limitations section.
   the cause or file it upstream, then drop `video.js`'s software-decode
   workaround.
 - The browser client has no file transfer (gdp-spec.md §7.12): offer
-  `file`, send dropped files, and fetch the host's copied ones.
+  `file`, send dropped files, and fetch the host's copied ones with a
+  download button (a browser can't mount or paste them).
 
 ## wraith
 
@@ -49,8 +50,13 @@ Limitations section.
   (ADR 0006).
 - A preflight check that turns "this user can't open any DRM node" into a
   clear error instead of a 30 s session-start timeout.
-- Copied files (gdp-spec.md §7.12) are untested on a real wlroots or KDE
-  desktop, the data-control clipboard path; GNOME's is tested.
+- Copied files (gdp-spec.md §7.12): the data-control clipboard path is
+  tested on labwc both ways (a headless client and wl-clipboard), not yet
+  in a KDE session; on GNOME, reading a copy is tested, putting the
+  client's files on the clipboard (`SetSelection` with file types) isn't.
+- Shared folders (`file-share`) are untested with a real Nautilus and
+  Dolphin: that the sidebar entries appear and go while they run, and how
+  their thumbnailers and Baloo treat the mount.
 
 ## Client
 
@@ -63,8 +69,16 @@ Limitations section.
   Video on NVIDIA; on Windows D3D11VA's P010 input, R10G10B10A2 output
   and the software path's BT.709 coefficients; VideoToolbox's P010 copy
   on a Mac.
-- spectre sends dropped files (gdp-spec.md §7.12) but does nothing with
-  the host's `FileList`, so files copied on the host reach it neither as
-  files nor, as before `file`, as paths in text: paste through a FUSE
-  folder fetching ranges is the plan
-  ([file transfer](docs/design/file-transfer.md)).
+- spectre's file paste (gdp-spec.md §7.12) is untested in a real window:
+  the SDL3 clipboard offer of the host's files (Nautilus and Dolphin
+  pasting from it), the clipboard update on focus that announces a local
+  copy, and a clipboard manager taking the offer over. What it is built
+  on is tested end to end (`wraith_remote_files_test`,
+  `wraith_client_files_test`, and a headless client against labwc).
+- Pasting the host's files into Windows Explorer isn't implemented: it
+  needs virtual files (`IDataObject` with `FILEGROUPDESCRIPTORW` and
+  `FILECONTENTS`), whose reads arrive on the main thread that also runs
+  the connection. Copying from Explorer to the host (`CF_HDROP`) is
+  written but untested on Windows. The Finder has neither.
+- A FUSE mount under `$XDG_RUNTIME_DIR` may be out of a Flatpak file
+  manager's sight (the document portal would be the way in).

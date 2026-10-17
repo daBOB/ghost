@@ -4,15 +4,25 @@ Files both ways behind the `file` capability (gdp-spec.md §7.12): the
 client offers each of its files on an additional stream of its own
 (§2.2), the host accepts it into the user's download directory; and the
 host lists the files its user copies, which the client fetches the same
-way, one stream per file. Code: libgdp's additional streams
-(`transport.hpp`, `src/transport/quic_conn.cpp`) and `file_transfer.hpp`,
-which both ends share; `host/wraith/src/session/file_receiver.*` and
-`file_sender.*` on the host, and the clipboard sink
-(`session/clipboard_sync.*`) for what was copied.
+way, one stream per file. With `file-clipboard` a copy pastes through the
+desktop's own file manager both ways, folders included, and with
+`file-share` the client's folders show up in the host's file manager:
+each side mounts the other's files with FUSE and the bytes come over as
+they are read ("Paste and shared folders" below).
+
+Code: libgdp's additional streams (`transport.hpp`,
+`src/transport/quic_conn.cpp`), `file_transfer.hpp` and `file_list.hpp`,
+which both ends share, and `remote_files.hpp` / `remote_mount.hpp`, the
+mount; `host/wraith/src/session/file_receiver.*`, `file_sender.*` and
+`client_files.*` on the host, and the clipboard sinks
+(`session/clipboard_sync.*`, `screencast/*_clipboard.*`) for what was
+copied; `client/spectre/src/net/local_files.*`, `clipboard_files.*` and
+`stream/stream_session.cpp` on spectre.
 
 The client opens every stream, both ways (a fetch is a request on a
-stream of the client's), so the host never opens streams and the client
-keeps granting none.
+stream of the client's, and the host asks for the client's files with a
+`FileFetch` the client answers on a stream of its own), so the host never
+opens streams and the client keeps granting none.
 
 ## Additional streams in libgdp
 
@@ -101,14 +111,20 @@ destroyed with it.
   `FileList` and not as text; without one (no `file`, or `[files] send =
   false`) they go as their text, one a line, as before. Copying text
   afterwards takes the list back with an empty one.
-- **The list.** `FileSender::set_list()` stats each path: folders are
-  listed but flagged, anything else that isn't a regular file (devices,
-  pipes) or has an unusable name is left out, at most 1000 entries. The
-  latest list and up to 4 earlier ones stay fetchable, each for 10
-  minutes after it was replaced, so a paste still reading (a FUSE mount
-  on the client, one day) survives a new copy; a fetch already going
-  keeps going regardless. Only on a session with `clipboard` as well as
-  `file`: the list is clipboard content.
+- **The list.** `FileSender::set_list()` builds it with
+  `gdp::LocalFileList`: anything that isn't a regular file or a folder
+  (devices, pipes) or has an unusable name is left out, at most 1000
+  copied entries; something copied that is a symbolic link is followed
+  (the user picked it). With `file-clipboard`, what is in the copied
+  folders follows breadth-first, a folder's entries all or none, until
+  the encoded list reaches 512 KiB, and links inside are never followed;
+  a folder left out is `unlisted` and listed on request
+  (`FileSender::serve_listing()`, appending its entries to the list). The
+  latest list and up to 4 earlier ones stay fetchable, each until 10
+  minutes after it was replaced or last read from, the one read from
+  least recently dropped first, so a paste still reading through the
+  client's mount survives a new copy. Only on a session with `clipboard`
+  as well as `file`: the list is clipboard content.
 - **Sending.** A request is answered from a list still kept, by index:
   the file is opened then, and `FileSending` carries its size at that
   moment. A request may name a range (`offset`, `length`), which is
@@ -123,10 +139,73 @@ destroyed with it.
   within 25 ms of the lowest seen and halving (once a round trip) above
   it, between 256 KiB and 16 MiB. The client's uploads use the same rule.
 
+## Paste and shared folders
+
+The receiving side puts *paths* on its clipboard, as a file manager's
+copy does, and the file manager copies from them: so each side mounts the
+other's files, and a read in the mount becomes a request over the
+connection. This is the design of RDP's file clipboard (xrdp,
+gnome-remote-desktop, FreeRDP) and RustDesk's.
+
+- **`gdp::RemoteMount`** (libgdp, Linux, libfuse3's low-level API): a
+  read-only mount whose tree and bytes come from its owner. FUSE's loop
+  runs on a thread of the mount's own and only queues each request;
+  everything else runs on the owner's thread from `dispatch()`, so the
+  network code never sees another thread. That thread must never touch
+  the mount (a stat there waits for a `dispatch()` that can't come), so
+  a copy whose paths lead into our own mount -- a clipboard manager that
+  took our offer over -- is ignored on both ends (`contains()`).
+- **Reading:** one range per open file, from the first read to the end of
+  the file; reads behind it, or more than 2 MiB past what has come, open
+  a new range there. The buffer keeps only what a waiting read still
+  needs, and what goes to FUSE gives the stream its window back, so a slow
+  copy holds the sender back rather than filling memory. A whole file
+  read in order costs one request, at link speed rather than one round
+  trip per piece (xrdp keeps one piece outstanding at a time).
+- **Modes:** files and folders show as 0644/0755 on a read-only mount: a
+  copy keeps the mode, and a pasted folder its user can't write into is
+  no use.
+- **`gdp::RemoteFiles`** fills a mount from the other end: each
+  `FileList` becomes `clip/<list_id>/` (the newest 5 kept, as the sender
+  keeps them), each share `shares/<name>/`, re-listed when its listing is
+  more than 5 s old. It turns a range or a listing into a request through
+  a function the owner gives it, and parses the answer (one `FileReply`
+  then raw bytes, or listing frames) into the mount. spectre's requests
+  open a stream with a `FileRequest`/`FileListingRequest`; wraith's send a
+  `FileFetch` and take the client's answering stream from
+  `FileReceiver::on_answer`.
+- **Clipboards.** spectre offers the mount's paths through SDL3's custom
+  clipboard formats (`x-special/gnome-copied-files` saying "copy", then
+  `text/uri-list` and the paths as text), produced when a paste asks, and
+  ignores the clipboard update its own offer causes (the event's `owner`).
+  wraith's sinks take the selection with the same formats
+  (`ClipboardSink::set_files()`): mutter's `SetSelection` (whose echo
+  says session-is-owner), or a data-control source (whose echo is
+  compared with what it offers). Always a copy, never a cut: nothing
+  deletes an original across.
+- **The client's copies.** spectre reads copied files from the clipboard
+  (SDL's mime types; Explorer's `CF_HDROP` on Windows), sends them as a
+  `FileList` built the same way, and answers `FileFetch` from
+  `LocalFiles`, by list and index, with the host's lifetime rule.
+- **Shared folders** (spectre `-S`): `LocalFiles` answers by path,
+  through `gdp::resolve_beneath()` (no empty parts, `.`, `..` or
+  symbolic links on the way). wraith mounts each under
+  `$XDG_RUNTIME_DIR/ghost/files/shares/` -- not under `$HOME`, where
+  Baloo and backup tools would crawl a remote mount -- and adds a GTK
+  bookmark and a KDE Places entry (`file_bookmarks.*`), removed with the
+  share and, after a crash, at the next start.
+
 ## Limitations
 
-- No folders either way, no resumption: a connection lost mid-transfer
-  loses the partial file.
+- No resumption: a connection lost mid-transfer loses the partial file.
+  Uploads (drag and drop) don't take folders.
+- Pasting the host's files into Windows Explorer isn't implemented: it
+  needs Explorer's virtual files (`IDataObject` with
+  `FILEGROUPDESCRIPTORW`/`FILECONTENTS`), whose reads arrive on the main
+  thread that also runs the connection. macOS has neither FUSE nor that.
+  Copying from Explorer to the host works.
+- Sandboxed (Flatpak) file managers may not see a mount under
+  `$XDG_RUNTIME_DIR`.
 - File data and the client's StatsReports share the client's uplink. A
   client that sends faster than its uplink carries delays its reports
   and makes the host's rate control think the path got worse; pacing is

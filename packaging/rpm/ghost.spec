@@ -61,6 +61,7 @@ BuildRequires:  tomlplusplus-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  opus-devel
 BuildRequires:  libei-devel
+BuildRequires:  fuse3-devel
 BuildRequires:  systemd-devel
 BuildRequires:  SDL3-devel
 BuildRequires:  ffmpeg-devel
@@ -85,6 +86,7 @@ Requires:       firewalld-filesystem
 Requires(post): policycoreutils
 %{?systemd_requires}
 Recommends:     foot
+Recommends:     fuse3
 Recommends:     labwc
 Recommends:     mesa-dri-drivers
 Recommends:     pipewire
@@ -132,6 +134,7 @@ this one.
 %package -n spectre
 Summary:        Ghost client: spectre and its Qt launcher
 Requires:       hicolor-icon-theme
+Recommends:     fuse3
 Recommends:     mesa-dri-drivers
 Recommends:     mesa-vulkan-drivers
 

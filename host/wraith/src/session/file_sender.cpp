@@ -32,6 +32,13 @@ int64_t mtime_ms(const struct stat &st) {
 	return (int64_t)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
 }
 
+void send_refused(gdp::Stream &stream, gdp::session::FileErrorCode code) {
+	gdp::session::FileReply reply;
+	reply.mutable_refused()->set_code(code);
+	stream.send_message(reply);
+	stream.send(nullptr, 0, true);
+}
+
 } // namespace
 
 void FileWindow::update(uint32_t rtt_us, uint64_t now_us) {
@@ -90,7 +97,7 @@ FileSender::~FileSender() {
 	}
 }
 
-gdp::session::FileList FileSender::set_list(const std::vector<std::string> &paths) {
+gdp::session::FileList FileSender::set_list(const std::vector<std::string> &paths, bool tree) {
 	uint64_t now = now_us_();
 	auto latest = lists_.find(list_id_);
 	if (latest != lists_.end()) {
@@ -98,45 +105,39 @@ gdp::session::FileList FileSender::set_list(const std::vector<std::string> &path
 	}
 	list_id_++;
 	List &list = lists_[list_id_];
-	list.listing.set_list_id(list_id_);
-	for (const std::string &path : paths) {
-		if (list.paths.size() == gdp::kMaxFileListEntries) {
-			break;
-		}
-		struct stat st;
-		std::string name = path.substr(path.find_last_of('/') + 1);
-		if (stat(path.c_str(), &st) != 0 || !gdp::valid_file_name(name)) {
-			continue;
-		}
-		bool directory = S_ISDIR(st.st_mode);
-		if (!directory && !S_ISREG(st.st_mode)) {
-			continue; // a device, a pipe: nothing to send
-		}
-		auto *entry = list.listing.add_files();
-		entry->set_name(name);
-		entry->set_size(directory ? 0 : (uint64_t)st.st_size);
-		entry->set_modified_unix_ms(mtime_ms(st));
-		entry->set_directory(directory);
-		list.paths.push_back(path);
-	}
-	if (!list.paths.empty()) {
-		WLOG_INFO("file: the clipboard holds %zu copied file(s) for the client", list.paths.size());
+	list.files = gdp::LocalFileList::build(list_id_, paths, tree);
+	list.last_used_us = now;
+	if (list.files.size() > 0) {
+		WLOG_INFO("file: the clipboard holds %d copied file(s) for the client (%zu entries listed)",
+			(int)std::count_if(list.files.listing().files().begin(), list.files.listing().files().end(),
+				[](const gdp::session::FileListEntry &e) { return e.parent() == 0; }),
+			list.files.size());
 	}
 	expire_lists(now);
-	return list.listing;
+	return list.files.listing();
 }
 
 void FileSender::expire_lists(uint64_t now_us) {
-	size_t earlier = 0;
+	// An earlier list lasts kKeptListUs past whichever came later: being
+	// replaced, or its last request. Past kKeptLists of them, the one read
+	// from least recently goes first.
+	std::vector<std::pair<uint64_t, uint64_t>> earlier; // (last active, id)
 	std::vector<uint64_t> gone;
-	// Newest first, so whatever is past the count is the oldest.
-	for (auto it = lists_.rbegin(); it != lists_.rend(); ++it) {
-		const List &list = it->second;
+	for (const auto &[id, list] : lists_) {
 		if (list.replaced_us == 0) {
 			continue; // the latest
 		}
-		if (++earlier > kKeptLists || now_us - list.replaced_us >= kKeptListUs) {
-			gone.push_back(it->first);
+		uint64_t active = std::max(list.replaced_us, list.last_used_us);
+		if (now_us - active >= kKeptListUs) {
+			gone.push_back(id);
+		} else {
+			earlier.emplace_back(active, id);
+		}
+	}
+	if (earlier.size() > kKeptLists) {
+		std::sort(earlier.begin(), earlier.end());
+		for (size_t i = 0; i < earlier.size() - kKeptLists; i++) {
+			gone.push_back(earlier[i].second);
 		}
 	}
 	for (uint64_t id : gone) {
@@ -144,18 +145,46 @@ void FileSender::expire_lists(uint64_t now_us) {
 	}
 }
 
+FileSender::List *FileSender::use_list(uint64_t list_id) {
+	uint64_t now = now_us_();
+	expire_lists(now);
+	auto it = lists_.find(list_id);
+	if (it == lists_.end()) {
+		return nullptr;
+	}
+	it->second.last_used_us = now;
+	return &it->second;
+}
+
+void FileSender::serve_listing(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileListingRequest &request) {
+	List *list = use_list(request.list_id());
+	std::vector<gdp::session::FileListing> frames;
+	if (!list || !list->files.list_folder(request.index(), &frames)) {
+		send_refused(*stream, gdp::session::FILE_ERROR_GONE);
+		return;
+	}
+	for (auto &frame : frames) {
+		gdp::session::FileReply reply;
+		*reply.mutable_listing() = std::move(frame);
+		stream->send_message(reply);
+	}
+	stream->send(nullptr, 0, true);
+	// Dropped here: our side ended with the FIN, so the frames still go.
+}
+
 void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileRequest &request) {
 	uint32_t index = request.index();
-	expire_lists(now_us_());
-	auto kept = lists_.find(request.list_id());
-	if (kept == lists_.end() || index >= kept->second.paths.size() ||
-		kept->second.listing.files((int)index).directory()) {
+	List *kept = use_list(request.list_id());
+	if (!kept || index >= kept->files.size() || kept->files.is_directory(index)) {
 		refuse(std::move(stream), gdp::session::FILE_ERROR_GONE);
 		return;
 	}
-	const std::string &path = kept->second.paths[index];
+	const std::string &path = kept->files.path(index);
 	auto file = std::make_shared<OpenFile>();
-	file->fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+	// Only what was copied itself may be reached through a symbolic link: a
+	// file inside a copied folder that became one since it was listed isn't.
+	int flags = O_RDONLY | O_CLOEXEC | (kept->files.is_top_level(index) ? 0 : O_NOFOLLOW);
+	file->fd = open(path.c_str(), flags);
 	struct stat st;
 	if (file->fd < 0 || fstat(file->fd, &st) != 0 || !S_ISREG(st.st_mode)) {
 		bool gone = file->fd < 0 ? (errno == ENOENT || errno == ENOTDIR) : true;
@@ -170,7 +199,7 @@ void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::
 	t->id = next_transfer_++;
 	t->stream = std::move(stream);
 	t->file = std::move(file);
-	t->name = kept->second.listing.files((int)index).name();
+	t->name = kept->files.listing().files((int)index).name();
 	// gdp-spec.md §7.12: from `offset`, `length` bytes (0: to the end), cut
 	// short at the end of the file; an offset past it is no bytes at all.
 	uint64_t file_size = (uint64_t)st.st_size;
@@ -213,10 +242,7 @@ void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::
 }
 
 void FileSender::refuse(std::unique_ptr<gdp::Stream> stream, gdp::session::FileErrorCode code) {
-	gdp::session::FileReply reply;
-	reply.mutable_refused()->set_code(code);
-	stream->send_message(reply);
-	stream->send(nullptr, 0, true);
+	send_refused(*stream, code);
 	// Dropped here: our side ended with the FIN, so the reply still goes.
 }
 

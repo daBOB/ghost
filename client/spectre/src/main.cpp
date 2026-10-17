@@ -72,6 +72,8 @@ static void usage(const char *argv0) {
 	printf("            session menu switches to raw)\n");
 	printf("  -M        send this machine's microphone to the host, as a virtual microphone in the\n");
 	printf("            session, if it supports that. Off by default\n");
+	printf("  -S folder share a folder with the host, read-only, for the session: it shows up in\n");
+	printf("            the host's file manager (if the host allows it). Repeatable\n");
 	printf("  -k chord  keys that open the session menu, '+'-joined (default: %s);\n",
 		spectre::kDefaultMenuHotkey);
 	printf("            ctrl/alt/shift/super match either side, lctrl/ralt/... one side,\n");
@@ -195,6 +197,13 @@ int main(int argc, char *argv[]) {
 			options.raw_gamepads = false;
 		} else if (strcmp(arg, "-M") == 0) {
 			options.microphone = true;
+		} else if (strcmp(arg, "-S") == 0) {
+			const char *v = next_value();
+			if (!v) {
+				usage(argv[0]);
+				return 1;
+			}
+			options.shared_folders.push_back(v);
 		} else if (strcmp(arg, "-W") == 0) {
 			options.allow_pyrowave = false;
 		} else if (strcmp(arg, "-A") == 0) {

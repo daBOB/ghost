@@ -53,6 +53,19 @@ points), never over a file already there, and a notice says where they
 went. Folders aren't sent, and the host has to allow it (`[files]
 receive`, on by default; [configuration](../reference/configuration.md)).
 
+Copy and paste of files works both ways through the desktop's own file
+manager (Nautilus, Dolphin and the rest), folders included: copy on the
+host and paste on this machine, or copy here, click into the session and
+paste there. Nothing is transferred until something is pasted, and the
+file manager shows its own progress. On Linux this needs FUSE
+(`fusermount3`, from the `fuse3` package) on both ends; pasting the
+host's files into Windows Explorer or the macOS Finder isn't supported
+yet, copying from them is.
+
+`-S folder` (repeatable) shares a folder with the host for the session,
+read-only: it appears in the host's file manager sidebar, labelled
+"(shared by the client)", and goes when you disconnect.
+
 ## Trust
 
 spectre-qt remembers each login server's certificate on first use in

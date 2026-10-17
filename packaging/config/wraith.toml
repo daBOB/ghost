@@ -148,3 +148,12 @@
 # Where received files go. Empty is the user's download directory
 # (XDG_DOWNLOAD_DIR, else ~/Downloads); "~/" at the start is their home.
 #directory = ""
+
+# Folders a client shares (spectre -S) are mounted read-only for the
+# session under $XDG_RUNTIME_DIR/ghost/files/shares, for the session's own
+# file manager. Needs FUSE (fusermount3). false refuses them.
+#shares = true
+
+# A sidebar entry in Nautilus and Dolphin for each shared folder, removed
+# when the session ends.
+#bookmarks = true

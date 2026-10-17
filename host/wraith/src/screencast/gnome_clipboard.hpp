@@ -29,6 +29,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 struct sd_bus;
 struct wl_event_loop;
@@ -48,6 +49,7 @@ public:
 	~GnomeClipboard() override;
 
 	void set_text(const std::string &utf8) override;
+	void set_files(const std::vector<std::string> &paths) override;
 	void close() override;
 
 private:
@@ -57,6 +59,8 @@ private:
 	// Impl's D-Bus callbacks reach the ClipboardPipes pool through these
 	// (it's protected on the base class).
 	void read_pipe(int fd, const std::string &mime);
+	// SetSelection offering `mimes`; false if mutter refused.
+	bool take_selection(const std::vector<std::string> &mimes);
 	void cancel_reads();
 	void write_pipe(int fd, std::string payload, uint32_t serial);
 

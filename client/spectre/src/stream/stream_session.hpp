@@ -19,7 +19,9 @@
 #include "decode/decoder.hpp"
 #include "gdp/gamepad.hpp"
 #include "input/raw_controller.hpp"
+#include "gdp/remote_files.hpp"
 #include "net/file_transfers.hpp"
+#include "net/local_files.hpp"
 #include "net/session_client.hpp"
 #include "present/vulkan_presenter.hpp"
 #include "ui/draw_list.hpp"
@@ -34,6 +36,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -44,6 +47,7 @@ struct SDL_Window;
 struct SDL_Gamepad;
 union SDL_Event;
 struct SDL_KeyboardEvent;
+struct SDL_ClipboardEvent;
 struct SDL_MouseMotionEvent;
 struct SDL_MouseButtonEvent;
 struct AVFrame;
@@ -163,6 +167,9 @@ struct StreamOptions {
 	// the default recording device to it (spectre -M). Off by default: a
 	// microphone is never opened unless the user asked for one.
 	bool microphone = false;
+	// Folders to share with the host (spectre -S, repeatable): read-only,
+	// for the session, shown in the host's file manager (file-share).
+	std::vector<std::string> shared_folders;
 	// The chord that opens the session menu (spectre -k); main.cpp fills
 	// in kDefaultMenuHotkey when none is given.
 	HotkeyChord menu_hotkey;
@@ -256,7 +263,19 @@ private:
 	// the spectre window is focused -- a copy made in another local app is
 	// picked up on the next focus gain, which is exactly the moment before
 	// the user pastes into the remote session anyway.
-	void handle_clipboard_update();
+	void handle_clipboard_update(const SDL_ClipboardEvent &event);
+	// Copied files across (gdp-spec.md §7.12, file-clipboard): the host's
+	// go into host_files_' FUSE mount and onto the local clipboard as paths
+	// into it; the local user's are announced to the host and read from
+	// here when it pastes them.
+	void on_host_file_list(const gdp::session::FileList &list);
+	void request_host_file(uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset, bool listing);
+	void offer_files_on_clipboard(const std::vector<std::string> &paths);
+	const void *clipboard_files_data(const char *mime, size_t *size);
+	// Whether the local clipboard holds copied files, which go to the host
+	// as a list (true) and not as text.
+	bool announce_local_files();
+	void share_folders();
 	// File transfer (gdp-spec.md §7.12): a file dropped on the window goes
 	// to the host's download folder.
 	void handle_drop_file(const char *path);
@@ -410,8 +429,11 @@ private:
 	StreamOptions options_;
 
 	SessionClient client_;
-	// After client_, so its streams go before the connection does.
+	// After client_, so their streams go before the connection does.
 	FileTransfers files_{[this] { return client_.open_file_stream(); }};
+	gdp::RemoteFiles host_files_{[this](uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset,
+									 bool listing) { request_host_file(id, target, offset, listing); }};
+	LocalFiles local_files_{[this] { return client_.open_file_stream(); }};
 	Decoder decoder_;
 	VulkanPresenter presenter_;
 	// wraith omits SessionAccept.audio entirely when its own capture failed
@@ -444,6 +466,14 @@ private:
 	// belongs to the video subsystem, so text that arrives before
 	// open_window()'s SDL_Init waits here rather than being dropped.
 	std::optional<std::string> pending_clipboard_;
+	// The host's copied files, as paths into host_files_' mount, waiting
+	// for SDL the same way; and what the local clipboard offers while they
+	// are on it.
+	std::optional<std::vector<std::string>> pending_files_offer_;
+	std::vector<std::string> offered_files_;
+	std::map<std::string, std::string> offered_payloads_;
+	bool own_files_offer_ = false;
+	bool host_files_failed_ = false;
 
 	// Session state from the SessionClient callbacks.
 	bool accepted_ = false;

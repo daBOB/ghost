@@ -112,6 +112,7 @@ prints this list with no arguments; the logic of each is in
 | `-G` | Forward local gamepads: raw where the controller and host allow, so the host's own driver for it binds (touchpad, motion, lights, rumble, Steam Input), otherwise as a virtual Xbox pad ([gamepads](../design/audio-cursor-gamepad.md#gamepads)). |
 | `-g` | Forward local gamepads, starting with every one as a virtual Xbox pad. The session menu's Controllers row switches between that and raw. |
 | `-M` | Send this machine's microphone to the host. |
+| `-S folder` | Share a folder with the host, read-only, for the session: it shows up in the host's file manager. Repeatable. |
 
 `spectre --probe-decoders` prints each working decode path as
 `<path>:<codec>` (`vulkan:av1`, `vaapi:h264`, `software:h264`, ...) and

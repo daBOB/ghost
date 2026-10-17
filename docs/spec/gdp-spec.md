@@ -926,6 +926,8 @@ capability is still right.
 | `hid` | defined | §8.6 |
 | `microphone` | defined | §6.8, §10.1 |
 | `file` | defined | §7.12, an additional stream kind (§2.2) |
+| `file-clipboard` | defined | §7.12; only with `file` and `clipboard` |
+| `file-share` | defined | §7.12; only with `file` |
 | `usb` | reserved | an additional stream kind (§2.2) |
 
 Anything that changes the meaning of bytes an existing peer already
@@ -1046,7 +1048,9 @@ connection MUST be ignored.
 | `LogoutRequest` | client → host | | §7.10 |
 | `DiagnosticsRequest` | host → client | | §7.11 |
 | `DiagnosticsReport` | client → host | after a request | §7.11 |
-| `FileList` | host → client | `file` in effect | §7.12 |
+| `FileList` | host → client; client → host | `file` and `clipboard`; client → host `file-clipboard` | §7.12 |
+| `FileFetch` | host → client | `file-clipboard` or `file-share` | §7.12 |
+| `FileShare` | client → host | `file-share` | §7.12 |
 
 `NetworkProfileChanged` has one field, `profile` (1, `NetworkProfile`).
 
@@ -1397,15 +1401,23 @@ for the answer indefinitely.
 
 With the `file` capability in effect, the client sends files to the host,
 and, with `clipboard` in effect too, fetches the files the host's user
-copied, one additional stream (§2.2) of kind `file` per file. The client opens every `file` stream; the
-host never does. A host offers the capability only if it has somewhere to
+copied, one additional stream (§2.2) of kind `file` per file. Two more
+capabilities build on it: `file-clipboard` (with `file` and `clipboard`)
+adds what is in copied folders and the client's own copied files, for a
+paste on the host; `file-share` (with `file`) lets the client share
+folders with the host, read-only. Neither is in effect without what it
+builds on, whatever the other end lists. The client opens every `file`
+stream, those answering the host included; the host never does. A host offers the capability only if it has somewhere to
 put received files (§17, "File transfer"), and on accepting it grants the
 client 4 `file` streams at once (§2.2); a client with more files to send
 or fetch queues them.
 
 The stream's `StreamOpen.params` is a `FileOpen`, whose `oneof` holds a
-`FileOffer` (case 1, a file for the host, below) or a `FileRequest`
-(case 2, a file from the host, "Copied files" below):
+`FileOffer` (case 1, a file for the host, below), a `FileRequest` (case
+2, a file from the host, "Copied files" below), a `FileListingRequest`
+(case 3, a folder's contents, "Folder contents") or a `FileAnswer` (case
+4, the client's answer to the host, "The client's copied files"). A
+`FileOffer`:
 
 | # | Field | Type | Meaning |
 |---|---|---|---|
@@ -1416,7 +1428,7 @@ The stream's `StreamOpen.params` is a `FileOpen`, whose `oneof` holds a
 Everything the host sends on an offer's stream is a `FileReply` frame
 (§3.1), a `oneof` of `accepted` (1, `FileAccepted`, no fields), `refused`
 (2, `FileError`), `saved` (3, `FileSaved`) and `failed` (4, `FileError`);
-case 5, `sending`, answers a request. `FileError` has one field, `code`
+case 5, `sending`, answers a request, and case 6, `listing`, a listing. `FileError` has one field, `code`
 (1, `FileErrorCode`); `FileSaved` has two, `name` (1, string), the name
 the file was stored under, and `directory` (2, string), the folder it is
 in: an absolute path on the host, for the client to tell its user where
@@ -1489,9 +1501,9 @@ sent:
 
 A `FileListEntry` is `name` (1, string, the rules above), `size` (2,
 uint64, when the list was made), `modified_unix_ms` (3, int64, 0 if
-unknown) and `directory` (4, bool: a folder, which can't be fetched in
-this version; what is inside one is left to a later capability, so that
-a client that doesn't know it never sees entries it can't place). When the clipboard stops holding files, the host sends a
+unknown) and `directory` (4, bool: a folder, whose own bytes can't be
+fetched; with `file-clipboard`, what is in it can, "Folder contents").
+When the clipboard stops holding files, the host sends a
 `FileList` with a new `list_id` and no files; right after `SessionAccept`
 it sends the current one if its clipboard holds files. While the
 clipboard holds files the host does not also send their paths as
@@ -1505,6 +1517,29 @@ answering requests from earlier ones for a while, so that a paste still
 under way survives the user copying something else; it answers `GONE`
 for a list it no longer keeps. A client relies on neither: an earlier
 list may be gone, or still there.
+
+**Folder contents** (`file-clipboard`). A list then carries, after what
+was copied, what is in the copied folders, parents before their contents:
+each such entry has `parent` (5, uint32) set to 1 + the index of the
+folder it is in (0 for what was copied itself). A sender includes a
+folder's entries all or none, breadth-first, while the encoded list stays
+within 512 KiB, and marks a folder whose entries it left out `unlisted`
+(6, bool). The 1000-entry limit counts what was copied; a list, listings
+included, comes to at most 100 000 entries.
+
+To list an `unlisted` folder (or any folder again), the client opens a
+`file` stream whose `FileOpen` is a `FileListingRequest` (`list_id` 1,
+uint64; `index` 2, uint32) and finishes its direction with FIN. The host
+answers with one or more `FileReply{listing}` frames, each within 512
+KiB, then FIN, or with `refused{FILE_ERROR_GONE}` (the list isn't kept,
+or the entry isn't a folder) and FIN. A `FileListing` is `first_index`
+(1, uint32) and `files` (2, repeated `FileListEntry`): the folder's
+direct entries, which take the indices from `first_index` on in their
+list and can be fetched and listed by them like any other; a folder among
+them is `unlisted` unless its entries are already in the list. Asking
+again for a folder already listed gives the same entries and indices. A
+host MUST include only regular files and folders it reached without
+following a symbolic link: only what was copied itself may be one.
 
 To fetch file `index` of list `list_id`, the client opens a `file`
 stream whose `FileOpen` is a `FileRequest` and finishes its direction
@@ -1548,6 +1583,50 @@ SHOULD keep file data from building up a queue in front of it: it sends
 file bytes only while the video's own send queue is short, and keeps the
 file bytes in flight to what the path takes without queueing.
 
+**The client's copied files** (`file-clipboard`). When the client's
+clipboard comes to hold files its user copied, the client sends a
+`FileList` (client → host, control stream) just as the host does, folder
+contents included, and no longer than it holds them (an empty list takes
+it back). It does not also send their paths as `ClipboardData`. The host
+offers them on its own clipboard as copied files, and reads them, when a
+paste in the session wants their bytes, by asking:
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `fetch_id` | uint64 | New for every fetch; names the answering stream. |
+| 2 | `list_id` | uint64 | One of the client's lists. |
+| 3 | `index` | uint32 | An entry in it. |
+| 4 | `offset` | uint64 | As `FileRequest`. |
+| 5 | `length` | uint64 | As `FileRequest`. |
+| 6 | `listing` | bool | A folder's contents, not bytes. |
+| 7 | `share_id` | uint64 | `file-share`: instead of `list_id` and `index`, a shared folder ... |
+| 8 | `path` | string | ... and a path in it ("Shared folders"). |
+
+`FileFetch` goes on the control stream (host → client). The client
+answers on a `file` stream of its own whose `FileOpen` is a `FileAnswer`
+(`fetch_id` 1, uint64), followed at once, in the same direction, by what
+the host would have sent for the equivalent request: `sending` and the
+bytes, one or more `listing` frames, or `refused`, then FIN. The rules of
+a request apply with the roles swapped: the client answers only by list
+and index, keeps its lists as the host does, checks nothing it serves
+leaves what was copied, and resets a stream it can't finish. The host
+resets an answering stream it no longer wants, and gives up on a fetch
+not answered within 30 s. A `FileAnswer` naming a fetch the host doesn't
+know, or no longer wants, is reset.
+
+**Shared folders** (`file-share`). The client shares a folder its user
+picked with `FileShare` (client → host, control stream): `share_id` (1,
+uint64, new for every share, never 0), `name` (2, string, the name rules
+above, what the host shows it as) and `removed` (3, bool: no longer
+shared). A share is read-only and lasts until removed or the session
+ends. The host reads it with `FileFetch` by `share_id` and `path`:
+'/'-separated parts, each following the name rules, "" for the folder
+itself. Listing entries of a shared folder carry no indices
+(`first_index` is 0 and means nothing) and are named by their path. The
+client MUST refuse (`FILE_ERROR_GONE`) a path with an empty part, `.`,
+`..`, or any part that is a symbolic link, and MUST serve nothing outside
+the shared folder; it lists only regular files and folders.
+
 *Host behavior:* the reference host stores files in the user's download
 directory (`XDG_DOWNLOAD_DIR`, else `~/Downloads`), writing to a hidden
 temporary file there and renaming it once complete, and never overwrites
@@ -1557,7 +1636,15 @@ shows one desktop notification when a batch of transfers has finished.
 It reads copied files from the clipboard's `x-special/gnome-copied-files`
 or `text/uri-list` (local `file://` URIs only), and sends them from a
 thread of its own. It keeps the latest list and up to 4 earlier ones,
-each for 10 minutes after the next one replaced it.
+each until 10 minutes after it was replaced or last read from, whichever
+is later, dropping the one read from least recently first. With
+`file-clipboard` and `file-share` it mounts the client's copied files and
+shared folders read-only with FUSE under `$XDG_RUNTIME_DIR/ghost/files`
+(`clip/<list_id>/`, `shares/<name>/`), puts paths into it on the
+session's clipboard, gives each shared folder a GTK bookmark and a KDE
+Places entry for the session, and re-lists a shared folder when its
+listing is more than 5 s old. The reference client mounts the host's
+copied files the same way under `$XDG_RUNTIME_DIR/spectre/<pid>`.
 
 ---
 
@@ -2435,7 +2522,7 @@ Registries, all lowercase tokens unless stated:
 | Datagram channels | §3.2 | 0x01 video, 0x02 audio, 0x03 microphone |
 | Video codecs | §6.6 | `h264`, `h265`, `av1`, `pyrowave` |
 | Audio codecs | §6.8 | `opus` |
-| Capabilities | §6.7 | `clipboard`, `refine`, `gamepad`, `hid`, `microphone`, `file`; `usb` reserved |
+| Capabilities | §6.7 | `clipboard`, `refine`, `gamepad`, `hid`, `microphone`, `file`, `file-clipboard`, `file-share`; `usb` reserved |
 | Stream kinds | §2.2 | `file`; `usb` reserved |
 | Clipboard MIME types | §7.9 | `text/plain` |
 | Refinement tile formats | §9.5 | 0 `BGR8` |
@@ -2541,6 +2628,15 @@ shows the client a path on the host, which usually names the user's
 account; it goes only to the attached client, which sees the desktop
 anyway.
 
+With `file-clipboard` and `file-share` the host reads from the client,
+and the same rules hold the other way: the host can reach only what the
+client's user copied (by list and index) or a folder they chose to share
+(by a path that the client resolves inside it, refusing `..`, empty parts
+and symbolic links); nothing is ever written to the client. A client
+SHOULD let its user see which folders are shared. A host that mounts the
+client's files makes them readable by any process of the session's user,
+which is who pasted them or opened the share.
+
 **Raw controllers.** A HID device's identity and descriptor decide which
 of the host's drivers binds to it and what that driver makes of it, so
 `hid` (§8.6) lets the client plug arbitrary HID hardware into the host
@@ -2586,8 +2682,10 @@ either side to the other; a client SHOULD let its user turn it off.
 | File streams at once | 4 | §7.12 |
 | File name, maximum; opening frame, maximum | 255 bytes; 4096 bytes | §7.12 |
 | File offer or request, reply deadline | 30 s | §7.12 |
-| `FileList` entries, maximum | 1000 | §7.12 |
-| Earlier `FileList`s kept (reference host) | 4, for 10 min each | §7.12 |
+| `FileList` entries, maximum | 1000 copied; 100 000 with folder contents and listings | §7.12 |
+| `FileList` with folder contents; `FileListing` frame | 512 KiB encoded | §7.12 |
+| Earlier `FileList`s kept (reference host) | 4, each 10 min after replaced or last read | §7.12 |
+| Shared folder listing, reference host's cache | 5 s | §7.12 |
 | `DiagnosticsReport` text, maximum | 512 KiB | §7.11 |
 | Gamepad slots; axes; buttons | 4; 6; 26 | §8.5 |
 | HID report descriptor; report | 4096 bytes; 4096 bytes | §8.6 |
@@ -2624,6 +2722,8 @@ every implementation listed for it.
 | Clipboard rules | `libgdp/include/gdp/clipboard.hpp` |
 | Additional streams | `Connection::open_stream()`, `allow_streams()` and `on_stream` in `libgdp/include/gdp/transport.hpp` |
 | File transfer rules | `libgdp/include/gdp/file_transfer.hpp`; `host/wraith/src/session/file_receiver.cpp` (the host) |
+| Lists, folder contents and shared paths | `libgdp/include/gdp/file_list.hpp` |
+| Mounting the other end's files (FUSE) | `libgdp/include/gdp/remote_files.hpp`, `remote_mount.hpp`; `host/wraith/src/session/client_files.cpp`; `client/spectre/src/net/local_files.cpp` |
 | Gamepad order | `libgdp/include/gdp/gamepad.hpp` |
 | Session clock | `libgdp/include/gdp/clock.hpp` |
 | Error codes | `libgdp/include/gdp/error_codes.hpp` (pinned by `error_codes_test`); `LobbyErrorCode` in `lobby.proto`; `host/veil/app/session.js` |
