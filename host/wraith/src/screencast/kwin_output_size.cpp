@@ -17,8 +17,9 @@ namespace wraith {
 
 namespace {
 
-// set_custom_modes arrived in v18. kwin 6.6 advertises 19.
-constexpr uint32_t kManagementVersion = 18;
+// set_custom_modes arrived in v18. kwin 6.6 advertises 19, kwin 6.8 advertises 22 and requires >= 22.
+constexpr uint32_t kMinManagementVersion = 18;
+constexpr uint32_t kMaxManagementVersion = 22;
 // kwin 6.7 no longer advertises kde_output_device_v2 as a global per output;
 // the outputs come from kde_output_device_registry_v2 (which needs v21).
 constexpr uint32_t kRegistryVersion = 21;
@@ -233,12 +234,12 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 	}
 
 	s.management = static_cast<struct kde_output_management_v2 *>(
-		client.bind(&kde_output_management_v2_interface, kManagementVersion));
+		client.bind(&kde_output_management_v2_interface, kMaxManagementVersion));
 	uint32_t version =
 		s.management ? wl_proxy_get_version(reinterpret_cast<struct wl_proxy *>(s.management)) : 0;
-	if (version < kManagementVersion) {
+	if (version < kMinManagementVersion) {
 		*error = "kwin's kde_output_management_v2 is version " + std::to_string(version) +
-			", custom modes need " + std::to_string(kManagementVersion);
+			", custom modes need at least " + std::to_string(kMinManagementVersion);
 		return false;
 	}
 
