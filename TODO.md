@@ -25,6 +25,8 @@ Limitations section.
   ([browser client](docs/design/browser-client.md#limitations)): find
   the cause or file it upstream, then drop `video.js`'s software-decode
   workaround.
+- The browser client has no file transfer (gdp-spec.md §7.12): offer
+  `file`, send dropped files, and fetch the host's copied ones.
 
 ## wraith
 
@@ -47,6 +49,8 @@ Limitations section.
   (ADR 0006).
 - A preflight check that turns "this user can't open any DRM node" into a
   clear error instead of a 30 s session-start timeout.
+- Copied files (gdp-spec.md §7.12) are untested on a real wlroots or KDE
+  desktop, the data-control clipboard path; GNOME's is tested.
 
 ## Client
 
@@ -59,3 +63,6 @@ Limitations section.
   Video on NVIDIA; on Windows D3D11VA's P010 input, R10G10B10A2 output
   and the software path's BT.709 coefficients; VideoToolbox's P010 copy
   on a Mac.
+- spectre has no file transfer (gdp-spec.md §7.12): offer `file`, send
+  dropped files and fetch the host's copied ones
+  ([file transfer](docs/design/file-transfer.md)).
