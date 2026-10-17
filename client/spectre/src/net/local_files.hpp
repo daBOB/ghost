@@ -8,12 +8,17 @@
 // share names is all the host can reach: a list by index, a share by a path
 // that never leaves it (gdp::resolve_beneath()).
 //
-// Main thread, from SessionClient::dispatch(); files are read inline, a
-// 256 KiB piece at a time, as fast as the host acknowledges them.
+// Main thread, from SessionClient::dispatch(). Nothing here waits on the
+// disk: lists are built, folders listed, paths resolved and files read (a
+// 256 KiB piece at a time, as fast as the host acknowledges them) on a
+// thread of its own (gdp::Worker), whose results come back through
+// notify_fd() and dispatch() -- so a slow or hung drive, -F's removable
+// ones included, never stalls the session's picture or input.
 #pragma once
 
 #include "gdp/file_list.hpp"
 #include "gdp/transport.hpp"
+#include "gdp/worker.hpp"
 #include "session.pb.h"
 
 #include <cstdint>
@@ -37,11 +42,21 @@ public:
 	LocalFiles &operator=(const LocalFiles &) = delete;
 
 	// The local clipboard now holds the files at `paths` (none: it no longer
-	// holds files): the FileList to send, with what is in the folders. The
-	// list it replaces is still answered a while, as the host does.
-	gdp::session::FileList set_list(const std::vector<std::string> &paths);
-	// Whether the last list sent had files.
+	// holds files): the FileList to send, with what is in the folders, handed
+	// to `ready` once built -- or not at all if set_list() is called again
+	// first, since only the latest copy counts. The list it replaces is still
+	// answered a while, as the host does.
+	using ListReady = std::function<void(const gdp::session::FileList &)>;
+	void set_list(const std::vector<std::string> &paths, ListReady ready);
+	// Whether the last list asked for had files.
 	bool has_list() const { return has_list_; }
+
+	// Readable whenever dispatch() has disk work's results to act on; -1 on
+	// Windows, where the main loop calls dispatch() on every pass.
+	int notify_fd() const { return worker_.notify_fd(); }
+	void dispatch() { worker_.dispatch(); }
+	// Disk work under way: for tests and logs.
+	size_t pending() const { return worker_.pending(); }
 
 	// Shares the folder at `path` (UTF-8): its id, or 0 if it isn't a
 	// folder. `name` is what the host is told to call it: given, or empty
@@ -66,6 +81,10 @@ public:
 
 private:
 	struct Job;
+	struct Found;
+	struct Look;
+	// The disk work of answer(), on the worker: nothing of this object's.
+	static Found look(const Look &l);
 	struct List {
 		gdp::LocalFileList files;
 		uint64_t replaced_us = 0;
@@ -74,16 +93,20 @@ private:
 	List *use_list(uint64_t list_id);
 	void expire_lists(uint64_t now_us);
 	void send_reply(gdp::Stream &stream, const gdp::session::FileReply &reply);
-	void refuse(std::unique_ptr<gdp::Stream> stream, gdp::session::FileErrorCode code);
-	void send_listing(std::unique_ptr<gdp::Stream> stream, const std::vector<gdp::session::FileListing> &frames);
-	void send_file(std::unique_ptr<gdp::Stream> stream, const std::string &path, const std::string &name,
-		const gdp::session::FileFetch &fetch);
+	// Each ends the stream's direction; the caller lets it go.
+	void refuse(gdp::Stream &stream, gdp::session::FileErrorCode code);
+	void send_listing(gdp::Stream &stream, const std::vector<gdp::session::FileListing> &frames);
+	// The rest of answer(), once the disk has been looked at.
+	void found(std::shared_ptr<gdp::Stream> stream, const gdp::session::FileFetch &fetch, Found found);
+	void send_file(std::shared_ptr<gdp::Stream> stream, const gdp::session::FileFetch &fetch, Found found);
+	// Asks the worker for the next piece of `job`, if the host has room.
 	void pump(Job *job);
 	void remove(Job *job);
 
 	OpenStream open_stream_;
 	std::function<uint64_t()> now_us_;
 	uint64_t list_id_ = 0;
+	uint64_t requested_list_ = 0; // the latest asked for: list_id_ once built
 	bool has_list_ = false;
 	std::map<uint64_t, List> lists_;
 	struct Share {
@@ -94,6 +117,8 @@ private:
 	uint64_t next_share_ = 1;
 	std::map<uint64_t, std::unique_ptr<Job>> jobs_;
 	uint64_t next_job_ = 1;
+	// Last: destroyed first, so nothing it hands back finds the rest gone.
+	gdp::Worker worker_;
 };
 
 } // namespace spectre

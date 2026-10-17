@@ -29,6 +29,7 @@ extern "C" {
 #include <cctype>
 #include <cerrno>
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -88,14 +89,22 @@ constexpr uint64_t kIndicatorFadeUs = 400'000;
 // EventQueue), so the main loop there just sleeps a fixed short interval and
 // dispatches unconditionally instead -- dispatch() is safe to call
 // speculatively even when nothing's pending (gdp/transport.hpp).
+// `others`: more fds to wake for, -1 for none.
 #ifdef _WIN32
-void wait_for_notify(int /*fd*/, int timeout_ms, int /*other_fd*/ = -1) {
+void wait_for_notify(int /*fd*/, int timeout_ms, std::initializer_list<int> /*others*/ = {}) {
 	Sleep((DWORD)timeout_ms);
 }
 #else
-void wait_for_notify(int fd, int timeout_ms, int other_fd = -1) {
-	struct pollfd pfds[2] = {{fd, POLLIN, 0}, {other_fd, POLLIN, 0}};
-	poll(pfds, other_fd >= 0 ? 2 : 1, timeout_ms);
+void wait_for_notify(int fd, int timeout_ms, std::initializer_list<int> others = {}) {
+	struct pollfd pfds[4];
+	nfds_t n = 0;
+	pfds[n++] = {fd, POLLIN, 0};
+	for (int other : others) {
+		if (other >= 0 && n < 4) {
+			pfds[n++] = {other, POLLIN, 0};
+		}
+	}
+	poll(pfds, n, timeout_ms);
 }
 #endif
 
@@ -616,9 +625,11 @@ void StreamSession::main_loop() {
 		}
 #endif
 
-		wait_for_notify(client_.notify_fd(), 4, host_files_.running() ? host_files_.notify_fd() : -1);
+		wait_for_notify(client_.notify_fd(), 4,
+			{host_files_.running() ? host_files_.notify_fd() : -1, local_files_.notify_fd()});
 		client_.dispatch();
 		host_files_.dispatch();
+		local_files_.dispatch();
 		host_files_.tick(gdp::monotonic_us());
 		present_pending_frame();
 
@@ -1482,7 +1493,8 @@ bool StreamSession::announce_local_files() {
 	std::vector<std::string> copied = local_copied_files(&holds_files);
 	if (!holds_files) {
 		if (local_files_.has_list()) {
-			client_.send_file_list(local_files_.set_list({})); // the files are gone from it
+			// The files are gone from it.
+			local_files_.set_list({}, [this](const gdp::session::FileList &list) { client_.send_file_list(list); });
 		}
 		return false;
 	}
@@ -1498,9 +1510,13 @@ bool StreamSession::announce_local_files() {
 	if (paths.empty()) {
 		return true; // nothing local in it: neither files nor their paths go
 	}
-	gdp::session::FileList list = local_files_.set_list(paths);
-	client_.send_file_list(list);
-	SLOG_INFO("files: %zu copied file(s) offered to the host", paths.size());
+	// Read off this thread (a big folder, a slow drive), then sent.
+	local_files_.set_list(paths, [this](const gdp::session::FileList &list) {
+		client_.send_file_list(list);
+		SLOG_INFO("files: %d copied file(s) offered to the host",
+			(int)std::count_if(list.files().begin(), list.files().end(),
+				[](const gdp::session::FileListEntry &e) { return e.parent() == 0; }));
+	});
 	return true;
 }
 

@@ -171,13 +171,14 @@ int main() {
 	auto spin = [&](int timeout_ms, const std::function<bool()> &done) {
 		int64_t start = now_ms();
 		while (!done()) {
-			struct pollfd fds[3] = {{server.notify_fd(), POLLIN, 0}, {client.notify_fd(), POLLIN, 0},
-				{wl_event_loop_get_fd(loop), POLLIN, 0}};
-			poll(fds, 3, 5);
+			struct pollfd fds[4] = {{server.notify_fd(), POLLIN, 0}, {client.notify_fd(), POLLIN, 0},
+				{wl_event_loop_get_fd(loop), POLLIN, 0}, {local.notify_fd(), POLLIN, 0}};
+			poll(fds, 4, 5);
 			server.dispatch();
 			client.dispatch();
 			wl_event_loop_dispatch(loop, 0);
 			wl_event_loop_dispatch_idle(loop);
+			local.dispatch();
 			while (!control.empty()) {
 				gdp::session::FileFetch f = control.front();
 				control.pop_front();
@@ -195,8 +196,12 @@ int main() {
 
 	// The client copies; the host mounts the list and gets the paths it
 	// would put on the session's clipboard.
-	auto list = local.set_list({(src / "photos").string(), (src / "notes.txt").string()});
-	CHECK(list.files_size() == 6 && local.has_list());
+	gdp::session::FileList list;
+	local.set_list({(src / "photos").string(), (src / "notes.txt").string()},
+		[&](const gdp::session::FileList &l) { list = l; });
+	CHECK(local.has_list()); // asked for at once, built off the main thread
+	CHECK(spin(5000, [&] { return list.list_id() != 0; }));
+	CHECK(list.files_size() == 6);
 	std::vector<std::string> paths = client_files->add_list(list);
 	const fs::path mnt = dir / "run" / "ghost" / "files";
 	CHECK(paths.size() == 2 && paths[0] == (mnt / "clip" / "1" / "photos").string());
@@ -219,6 +224,35 @@ int main() {
 	}
 	paster.join();
 	CHECK(snapshot(src) == snapshot(out));
+
+	// A copied folder too big for the list: unlisted, and listed when the
+	// session's file manager opens it, read off the client's main thread.
+	const fs::path many = dir / "client-many";
+	fs::create_directories(many);
+	for (int i = 0; i < 12000; i++) {
+		write_file(many / ("a-file-with-a-rather-long-name-" + std::to_string(i) + ".txt"), "");
+	}
+	gdp::session::FileList big_list;
+	local.set_list({many.string()}, [&](const gdp::session::FileList &l) { big_list = l; });
+	CHECK(spin(10000, [&] { return big_list.list_id() != 0; }));
+	CHECK(big_list.files_size() == 1 && big_list.files(0).unlisted());
+	std::vector<std::string> many_paths = client_files->add_list(big_list);
+	CHECK(many_paths.size() == 1);
+	size_t many_listed = 0;
+	std::thread opener([&] {
+		many_listed = many_paths.empty() ? 0 : names(many_paths[0]).size();
+		step = 3;
+	});
+	CHECK(spin(30000, [&] { return step.load() == 3; }));
+	if (step != 3) {
+		client_files.reset();
+	}
+	opener.join();
+	CHECK(many_listed == 12000);
+	CHECK(local.pending() == 0);
+
+	const size_t copied_keys = client_files->files().keys(); // the two copies'
+	CHECK(copied_keys == 6 + 1 + 12000);
 
 	// A shared folder: in the mount and the sidebar, listed when opened,
 	// listed again once stale.
@@ -259,9 +293,9 @@ int main() {
 	CHECK(plan == "# plan\n");
 	CHECK(!hidden_reached);
 	CHECK((later == std::vector<std::string>{"added-later.txt", "docs", "readme.txt"}));
-	// Listing the share again kept its entries' keys: the copy's 6, the
-	// share itself, docs, readme.txt, docs/plan.md and added-later.txt.
-	CHECK(client_files->files().keys() == 11);
+	// Listing the share again kept its entries' keys: the share itself,
+	// docs, readme.txt, docs/plan.md and added-later.txt.
+	CHECK(client_files->files().keys() == copied_keys + 5);
 
 	// No longer shared: gone from the sidebar and the keys.
 	gdp::session::FileShare unshare;
@@ -269,7 +303,7 @@ int main() {
 	unshare.set_removed(true);
 	client_files->share(unshare);
 	CHECK(read_file(wraith::gtk_bookmarks_path()).find("client-shared") == std::string::npos);
-	CHECK(client_files->files().keys() == 6);
+	CHECK(client_files->files().keys() == copied_keys);
 
 	// The session ends: unmounted, the sidebar entries gone, the user's own kept.
 	client_files.reset();

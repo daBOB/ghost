@@ -131,7 +131,10 @@ destroyed with it.
   what a client reading a file piece by piece needs; the reply says
   where its bytes start and how long the whole file is. A thread of its own reads 256 KiB at a time (`pread`), so a
   cold disk doesn't stall the encoder. A file that comes up short while
-  being read is reset rather than sent short.
+  being read is reset rather than sent short. Folders are read off the
+  event loop too, on a `gdp::Worker`: building a list (up to 512 KiB of
+  entries, some ten thousand stats) and listing a folder on request. A
+  list overtaken by a newer copy before it is built is never sent.
 - **Pacing.** File data competes with the video for the downlink.
   Nothing more is read while the video's send queue has a backlog
   (`GdpSession::send_queue_clear()`, retried every 10 ms), and the bytes in
@@ -154,7 +157,11 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
   network code never sees another thread. That thread must never touch
   the mount (a stat there waits for a `dispatch()` that can't come), so
   a copy whose paths lead into our own mount -- a clipboard manager that
-  took our offer over -- is ignored on both ends (`contains()`).
+  took our offer over -- is ignored on both ends (`contains()`), and
+  nothing that reads local folders (a list, a listing, a share's path)
+  looks inside one: `gdp::inside_own_mount()` knows this process's
+  mounts by name and real path, so a share of `$XDG_RUNTIME_DIR` leaves
+  its mount out unlooked at.
 - **Reading:** one range per open file, from the first read to the end of
   the file; reads behind it, or more than 2 MiB past what has come, open
   a new range there. The buffer keeps only what a waiting read still
@@ -186,7 +193,11 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
 - **The client's copies.** spectre reads copied files from the clipboard
   (SDL's mime types; Explorer's `CF_HDROP` on Windows), sends them as a
   `FileList` built the same way, and answers `FileFetch` from
-  `LocalFiles`, by list and index, with the host's lifetime rule.
+  `LocalFiles`, by list and index, with the host's lifetime rule. Its
+  disk work -- building lists, resolving and listing paths, opening
+  files and reading them a piece at a time -- runs on a `gdp::Worker`,
+  so a slow or hung drive (one of `-F`'s removable ones) never stalls
+  the picture or input.
 - **Shared folders** (spectre `-S`, and `-F` for the home folder and
   removable drives, or every drive on Windows, `my_folders.*`, looked at
   again every 3 s): `LocalFiles` answers by path, through
