@@ -436,7 +436,9 @@ void GnomeClipboard::set_files(const std::vector<std::string> &paths) {
 	i.own_files = paths;
 	// Its SelectionOwnerChanged carries session-is-owner too: never read
 	// back as a local copy of files.
-	take_selection(gdp::copied_files_offer_mime_types());
+	if (take_selection(gdp::copied_files_offer_mime_types())) {
+		note_peer_files();
+	}
 }
 
 } // namespace wraith

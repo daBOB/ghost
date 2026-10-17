@@ -144,6 +144,10 @@ protected:
 	// What an implementation calls with whatever it read as `mime`
 	// (select_mime()'s choice): copied files, or text.
 	void note_local_payload(const std::string &mime, const std::string &raw);
+	// What an implementation calls once set_files() put the client's files
+	// on the clipboard: neither the text nor the files seen before are
+	// there any more, so a later session's push must not bring them back.
+	void note_peer_files();
 
 	ClipboardPipes pipes_;
 

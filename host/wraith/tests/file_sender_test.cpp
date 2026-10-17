@@ -176,6 +176,7 @@ public:
 	explicit TestSink(wl_event_loop *loop) : ClipboardSink(loop) {}
 	void set_text(const std::string &) override {}
 	void read(const std::string &mime, const std::string &raw) { note_local_payload(mime, raw); }
+	void set_files(const std::vector<std::string> &) override { note_peer_files(); }
 };
 
 void test_clipboard_sink(wl_event_loop *loop) {
@@ -208,6 +209,17 @@ void test_clipboard_sink(wl_event_loop *loop) {
 	// A list with nothing local in it is not a copy of files.
 	sink.read("text/uri-list", "https://example.org/x\n");
 	CHECK(lists.size() == 2 && sink.current_files().empty());
+
+	// The client's files put on the clipboard: what the host had copied is
+	// gone, so a later session's push brings back neither its files nor
+	// its text.
+	sink.read("text/uri-list", "file:///tmp/y\n");
+	CHECK(lists.size() == 3 && sink.current_files() == std::vector<std::string>{"/tmp/y"});
+	sink.set_files({"/run/user/1000/ghost/files/clip/1/z"});
+	CHECK(lists.size() == 4 && lists[3].empty() && sink.current_files().empty());
+	sink.read("text/plain", "before");
+	sink.set_files({"/run/user/1000/ghost/files/clip/2/z"});
+	CHECK(sink.current_text().empty() && lists.size() == 4);
 }
 
 } // namespace

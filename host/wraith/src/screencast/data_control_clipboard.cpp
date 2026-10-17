@@ -271,7 +271,9 @@ void DataControlClipboard::set_files(const std::vector<std::string> &paths) {
 	}
 	i.own_text.clear();
 	i.own_files = paths;
-	offer(gdp::copied_files_offer_mime_types());
+	if (offer(gdp::copied_files_offer_mime_types())) {
+		note_peer_files();
+	}
 }
 
 bool DataControlClipboard::offer(const std::vector<std::string> &mimes) {

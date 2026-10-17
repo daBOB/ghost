@@ -1423,12 +1423,13 @@ void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
 	}
 	std::vector<std::string> paths = host_files_.add_list(list);
 	if (paths.empty()) {
-		// The host's clipboard holds something else (no files): what we
-		// offered goes, unless something newer already replaced it.
-		if (own_files_offer_ && sdl_initialized_) {
-			SDL_ClearClipboardData();
-			own_files_offer_ = false;
-		}
+		// The host's clipboard holds something else (no files). What we
+		// offered stays until something replaces it -- the host's text,
+		// which comes right behind this, or a local copy -- as text does
+		// (gdp-spec.md §7.9: no "clear"). Clearing it here would empty the
+		// clipboard for a moment, and a clipboard manager that never lets
+		// it be empty (Klipper) would put its previous entry back over the
+		// text that follows, and that entry would go to the host as a copy.
 		pending_files_offer_.reset();
 		return;
 	}
