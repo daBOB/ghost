@@ -275,10 +275,21 @@ int main() {
 	CHECK(loop.until(5000, [&] { return connected; }));
 	client->open_control_stream();
 	client->open_input_stream();
+	// set_list() hands its list back from the event loop, once built.
+	auto make_list = [&](const std::vector<std::string> &paths, bool tree = false) {
+		gdp::session::FileList made;
+		bool ready = false;
+		sender->set_list(paths, tree, [&](const gdp::session::FileList &l) {
+			made = l;
+			ready = true;
+		});
+		CHECK(loop.until(5000, [&] { return ready; }));
+		return made;
+	};
 
 	// The list: in order, a folder flagged, what isn't a file or folder
 	// (or isn't there, or has an unusable name) left out.
-	auto list = sender->set_list({dir + "/small.txt", dir + "/big.bin", dir + "/folder", "/dev/null",
+	auto list = make_list({dir + "/small.txt", dir + "/big.bin", dir + "/folder", "/dev/null",
 		dir + "/missing", dir + "/shrinks.bin", dir + "/empty"});
 	CHECK(list.list_id() == 1);
 	CHECK(list.files_size() == 5);
@@ -328,21 +339,21 @@ int main() {
 	CHECK(past->reply.has_refused() && past->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
 	// A list replaced by a newer one is still answered for a while: a
 	// paste still reading survives a new copy.
-	auto list2 = sender->set_list({dir + "/small.txt"});
+	auto list2 = make_list({dir + "/small.txt"});
 	CHECK(list2.list_id() == 2);
 	auto earlier = fetch(*client, 1, 0);
 	CHECK(loop.until(5000, [&] { return earlier->fin; }));
 	CHECK(earlier->reply.has_sending() && earlier->data == small);
 	// A file deleted after it was listed.
 	write_file(dir + "/doomed.txt", "x");
-	sender->set_list({dir + "/doomed.txt"});
+	make_list({dir + "/doomed.txt"});
 	unlink((dir + "/doomed.txt").c_str());
 	auto doomed = fetch(*client, 3, 0);
 	CHECK(loop.until(5000, [&] { return doomed->fin; }));
 	CHECK(doomed->reply.has_refused() && doomed->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
 
 	// While the video has a backlog, no file bytes go; then they do.
-	sender->set_list({dir + "/big.bin"});
+	make_list({dir + "/big.bin"});
 	video_clear = false;
 	auto held = fetch(*client, 4, 0);
 	loop.run(200);
@@ -358,7 +369,7 @@ int main() {
 	CHECK(loop.until(5000, [&] { return sender->active_transfers() == 0; }));
 
 	// A file that shrinks while it goes: reset rather than a short file.
-	sender->set_list({dir + "/shrinks.bin"});
+	make_list({dir + "/shrinks.bin"});
 	video_clear = false; // hold it until it has been cut
 	auto shrinks = fetch(*client, 5, 0);
 	CHECK(loop.until(5000, [&] { return shrinks->replied; }));
@@ -370,7 +381,7 @@ int main() {
 
 	// Earlier lists are kept up to kKeptLists of them: lists 1 to 5 so far,
 	// and a sixth pushes the oldest out.
-	CHECK(sender->set_list({dir + "/small.txt"}).list_id() == 6);
+	CHECK(make_list({dir + "/small.txt"}).list_id() == 6);
 	auto dropped = fetch(*client, 1, 0);
 	auto kept = fetch(*client, 2, 0);
 	CHECK(loop.until(5000, [&] { return dropped->fin && kept->fin; }));
@@ -399,12 +410,12 @@ int main() {
 	// Past kKeptLists, the list read from least recently goes, not the
 	// oldest: list 6, read just now, outlives 7.
 	for (int i = 0; i < 4; i++) {
-		sender->set_list({dir + "/small.txt"}); // 7 to 10
+		make_list({dir + "/small.txt"}); // 7 to 10
 	}
 	now_us += 1;
 	auto refresh = fetch(*client, 6, 0);
 	CHECK(loop.until(5000, [&] { return refresh->fin; }));
-	CHECK(sender->set_list({dir + "/small.txt"}).list_id() == 11);
+	CHECK(make_list({dir + "/small.txt"}).list_id() == 11);
 	auto oldest = fetch(*client, 6, 0);
 	auto evicted = fetch(*client, 7, 0);
 	CHECK(loop.until(5000, [&] { return oldest->fin && evicted->fin; }));
@@ -418,7 +429,7 @@ int main() {
 	write_file(dir + "/tree/a.txt", "in the tree");
 	write_file(dir + "/tree/sub/b.txt", "deeper");
 	CHECK(symlink("/etc/passwd", (dir + "/tree/link").c_str()) == 0);
-	auto tree = sender->set_list({dir + "/tree"}, true);
+	auto tree = make_list({dir + "/tree"}, true);
 	CHECK(tree.list_id() == 12 && tree.files_size() == 4);
 	CHECK(tree.files(1).name() == "a.txt" && tree.files(1).parent() == 1);
 	CHECK(tree.files(2).name() == "sub" && tree.files(2).parent() == 1 && tree.files(2).directory());
@@ -436,6 +447,19 @@ int main() {
 	auto swapped = fetch(*client, 12, 3);
 	CHECK(loop.until(5000, [&] { return swapped->fin; }));
 	CHECK(swapped->reply.has_refused() && swapped->reply.refused().code() == gdp::session::FILE_ERROR_READ_FAILED);
+
+	// Two copies before the first is built: only the latest is handed back,
+	// and the one it overtook never becomes a list.
+	bool overtaken = false;
+	gdp::session::FileList second;
+	sender->set_list({dir + "/tree"}, true, [&](const gdp::session::FileList &) { overtaken = true; });
+	sender->set_list({dir + "/small.txt"}, false, [&](const gdp::session::FileList &l) { second = l; });
+	CHECK(loop.until(5000, [&] { return second.list_id() != 0; }));
+	loop.run(100);
+	CHECK(!overtaken && second.list_id() == 14 && second.files_size() == 1);
+	auto never = fetch(*client, 13, 0);
+	CHECK(loop.until(5000, [&] { return never->fin; }));
+	CHECK(never->reply.has_refused() && never->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
 
 	// The window grew on a quiet link.
 	CHECK(sender->window().bytes() > wraith::FileWindow::kInitial);

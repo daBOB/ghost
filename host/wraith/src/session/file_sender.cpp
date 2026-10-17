@@ -78,6 +78,13 @@ FileSender::FileSender(struct wl_event_loop *loop, std::function<uint32_t()> rtt
 		},
 		this));
 	reader_ = std::thread([this] { reader_main(); });
+	folders_source_.reset(wl_event_loop_add_fd(
+		loop_, folders_.notify_fd(), WL_EVENT_READABLE,
+		[](int, uint32_t, void *data) {
+			static_cast<FileSender *>(data)->folders_.dispatch();
+			return 0;
+		},
+		this));
 }
 
 FileSender::~FileSender() {
@@ -97,24 +104,31 @@ FileSender::~FileSender() {
 	}
 }
 
-gdp::session::FileList FileSender::set_list(const std::vector<std::string> &paths, bool tree) {
-	uint64_t now = now_us_();
-	auto latest = lists_.find(list_id_);
-	if (latest != lists_.end()) {
-		latest->second.replaced_us = now;
-	}
-	list_id_++;
-	List &list = lists_[list_id_];
-	list.files = gdp::LocalFileList::build(list_id_, paths, tree);
-	list.last_used_us = now;
-	if (list.files.size() > 0) {
-		WLOG_INFO("file: the clipboard holds %d copied file(s) for the client (%zu entries listed)",
-			(int)std::count_if(list.files.listing().files().begin(), list.files.listing().files().end(),
-				[](const gdp::session::FileListEntry &e) { return e.parent() == 0; }),
-			list.files.size());
-	}
-	expire_lists(now);
-	return list.files.listing();
+void FileSender::set_list(const std::vector<std::string> &paths, bool tree, ListReady ready) {
+	uint64_t id = ++requested_list_;
+	folders_.run<gdp::LocalFileList>([id, paths, tree] { return gdp::LocalFileList::build(id, paths, tree); },
+		[this, id, ready = std::move(ready)](gdp::LocalFileList files) {
+			if (id != requested_list_) {
+				return; // the user copied something else while this was read
+			}
+			uint64_t now = now_us_();
+			auto latest = lists_.find(list_id_);
+			if (latest != lists_.end()) {
+				latest->second.replaced_us = now;
+			}
+			list_id_ = id;
+			List &list = lists_[id];
+			list.files = std::move(files);
+			list.last_used_us = now;
+			if (list.files.size() > 0) {
+				WLOG_INFO("file: the clipboard holds %d copied file(s) for the client (%zu entries listed)",
+					(int)std::count_if(list.files.listing().files().begin(), list.files.listing().files().end(),
+						[](const gdp::session::FileListEntry &e) { return e.parent() == 0; }),
+					list.files.size());
+			}
+			expire_lists(now);
+			ready(list.files.listing());
+		});
 }
 
 void FileSender::expire_lists(uint64_t now_us) {
@@ -157,19 +171,44 @@ FileSender::List *FileSender::use_list(uint64_t list_id) {
 }
 
 void FileSender::serve_listing(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileListingRequest &request) {
+	uint32_t index = request.index();
 	List *list = use_list(request.list_id());
-	std::vector<gdp::session::FileListing> frames;
-	if (!list || !list->files.list_folder(request.index(), &frames)) {
+	if (!list || !list->files.is_directory(index)) {
 		send_refused(*stream, gdp::session::FILE_ERROR_GONE);
+		return;
+	}
+	if (list->files.listed(index)) {
+		send_listing(*stream, list->files, index);
+		return;
+	}
+	// Dropped once answered: our side ended with the FIN, so the frames
+	// still go. A reset by the client meanwhile just makes that a no-op.
+	std::shared_ptr<gdp::Stream> held(std::move(stream));
+	uint64_t list_id = request.list_id();
+	folders_.run<std::vector<gdp::LocalEntry>>(
+		[path = list->files.path(index)] { return gdp::read_local_folder(path); },
+		[this, held, list_id, index](std::vector<gdp::LocalEntry> entries) {
+			List *list = use_list(list_id);
+			if (!list || !list->files.add_folder(index, entries)) {
+				send_refused(*held, gdp::session::FILE_ERROR_GONE);
+				return;
+			}
+			send_listing(*held, list->files, index);
+		});
+}
+
+void FileSender::send_listing(gdp::Stream &stream, gdp::LocalFileList &list, uint32_t index) {
+	std::vector<gdp::session::FileListing> frames;
+	if (!list.list_folder(index, &frames)) {
+		send_refused(stream, gdp::session::FILE_ERROR_GONE);
 		return;
 	}
 	for (auto &frame : frames) {
 		gdp::session::FileReply reply;
 		*reply.mutable_listing() = std::move(frame);
-		stream->send_message(reply);
+		stream.send_message(reply);
 	}
-	stream->send(nullptr, 0, true);
-	// Dropped here: our side ended with the FIN, so the frames still go.
+	stream.send(nullptr, 0, true);
 }
 
 void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileRequest &request) {

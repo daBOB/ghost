@@ -192,6 +192,17 @@ int main() {
 		}
 		return true;
 	};
+	// set_list() hands its list back from the event loop, once built.
+	auto make_list = [&](const std::vector<std::string> &paths, bool tree) {
+		gdp::session::FileList made;
+		bool ready = false;
+		sender.set_list(paths, tree, [&](const gdp::session::FileList &l) {
+			made = l;
+			ready = true;
+		});
+		CHECK(spin(5000, [&] { return ready; }));
+		return made;
+	};
 	CHECK(spin(5000, [&] { return up; }));
 	conn->open_control_stream();
 	conn->open_input_stream();
@@ -200,7 +211,7 @@ int main() {
 	CHECK(files.start(mnt.string(), &error));
 
 	// The host's copy: the list goes over (here by hand), the client mounts it.
-	auto list = sender.set_list({(src / "project").string(), (src / "loose.txt").string()}, true);
+	auto list = make_list({(src / "project").string(), (src / "loose.txt").string()}, true);
 	bool unlisted_many = false;
 	for (const auto &e : list.files()) {
 		if (e.name() == "many") {
@@ -237,7 +248,7 @@ int main() {
 
 	// A new copy: the earlier list is still there to read, the new one too.
 	write_file(src / "second.txt", "second copy\n");
-	auto list2 = sender.set_list({(src / "second.txt").string()}, true);
+	auto list2 = make_list({(src / "second.txt").string()}, true);
 	std::vector<std::string> copied2 = files.add_list(list2, true);
 	std::atomic<int> step{0};
 	std::string second, again;
@@ -264,7 +275,7 @@ int main() {
 
 	// A host from before file-clipboard: its list can't say what is in a
 	// folder, so the folder is left out rather than mounted empty.
-	auto flat = sender.set_list({(src / "project").string(), (src / "loose.txt").string()}, false);
+	auto flat = make_list({(src / "project").string(), (src / "loose.txt").string()}, false);
 	CHECK(flat.files_size() == 2);
 	std::vector<std::string> copied3 = files.add_list(flat, false);
 	CHECK(copied3.size() == 1 && fs::path(copied3[0]).filename() == "loose.txt");
@@ -273,7 +284,7 @@ int main() {
 	// (the 15000 listed on request included) with them.
 	CHECK(files.keys() > 15000);
 	for (int i = 0; i < (int)gdp::RemoteFiles::kKeptLists; i++) {
-		files.add_list(sender.set_list({(src / "loose.txt").string()}, true), true);
+		files.add_list(make_list({(src / "loose.txt").string()}, true), true);
 	}
 	CHECK(files.keys() == gdp::RemoteFiles::kKeptLists);
 	// (The tree, not the mount: this thread serves it.)

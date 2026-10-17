@@ -93,6 +93,16 @@ int main() {
 	auto empty = gdp::LocalFileList::build(4, {(root / "empty").string()}, false);
 	assert(empty.list_folder(0, &frames) && frames.size() == 1 && frames[0].files_size() == 0);
 
+	// In two steps, the folder read elsewhere: appended once, then listed
+	// without reading; a second read handed in after that changes nothing.
+	auto two = gdp::LocalFileList::build(5, {a, photos}, true, 60);
+	assert(!two.listed(0) && !two.add_folder(0, {})); // a file
+	assert(!two.listed(1));
+	std::vector<gdp::LocalEntry> read = gdp::read_local_folder(two.path(1));
+	assert(two.add_folder(1, read) && two.listed(1) && two.size() == 4);
+	assert(two.add_folder(1, read) && two.size() == 4);
+	assert(two.list_folder(1, &frames) && frames[0].first_index() == 2 && frames[0].files_size() == 2);
+
 	// Shared folder paths.
 	const std::string r = root.string();
 	assert(gdp::resolve_beneath(r, "") == r);

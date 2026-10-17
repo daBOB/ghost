@@ -946,10 +946,14 @@ void GdpSession::copied_files_changed(const std::vector<std::string> &paths) {
 	if (local.empty() && last_list_empty_) {
 		return; // nothing listed, nothing to take back
 	}
-	gdp::session::ControlEnvelope env;
-	*env.mutable_file_list() = file_sender_->set_list(local, file_tree_);
-	last_list_empty_ = env.file_list().files_size() == 0;
-	send_control(env);
+	// What was asked for, not what comes of it: a copy taken back before its
+	// list is built must still send the empty one.
+	last_list_empty_ = local.empty();
+	file_sender_->set_list(local, file_tree_, [this](const gdp::session::FileList &list) {
+		gdp::session::ControlEnvelope env;
+		*env.mutable_file_list() = list;
+		send_control(env);
+	});
 }
 
 void GdpSession::handle_client_file_list(const gdp::session::FileList &list) {

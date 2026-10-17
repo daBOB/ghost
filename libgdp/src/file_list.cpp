@@ -241,17 +241,31 @@ void LocalFileList::append_children(uint32_t index, const std::vector<LocalEntry
 	}
 }
 
+bool LocalFileList::listed(uint32_t index) const {
+	return is_directory(index) && children_[index].first != UINT32_MAX;
+}
+
+bool LocalFileList::add_folder(uint32_t index, const std::vector<LocalEntry> &entries) {
+	if (!is_directory(index)) {
+		return false;
+	}
+	if (listed(index)) {
+		return true;
+	}
+	if (paths_.size() + entries.size() > kMaxFileListTotal) {
+		return false;
+	}
+	append_children(index, entries);
+	return true;
+}
+
 bool LocalFileList::list_folder(uint32_t index, std::vector<session::FileListing> *frames, size_t frame_budget) {
 	frames->clear();
 	if (!is_directory(index)) {
 		return false;
 	}
-	if (children_[index].first == UINT32_MAX) {
-		std::vector<LocalEntry> entries = read_local_folder(paths_[index]);
-		if (paths_.size() + entries.size() > kMaxFileListTotal) {
-			return false;
-		}
-		append_children(index, entries);
+	if (!listed(index) && !add_folder(index, read_local_folder(paths_[index]))) {
+		return false;
 	}
 	const Children &c = children_[index];
 	session::FileListing frame;

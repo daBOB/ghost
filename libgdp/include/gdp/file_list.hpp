@@ -75,6 +75,14 @@ public:
 	// a folder, or the list would grow past kMaxFileListTotal.
 	bool list_folder(uint32_t index, std::vector<session::FileListing> *frames,
 		size_t frame_budget = kFileListBudgetBytes);
+	// The same in two steps, for an owner that reads folders off its own
+	// thread: whether folder `index` is listed already (list_folder() then
+	// reads nothing); if not, read_local_folder(path(index)) elsewhere and
+	// hand the entries to add_folder(), which appends them unless the folder
+	// was listed meanwhile. False if `index` isn't a folder, or the list
+	// would grow past kMaxFileListTotal.
+	bool listed(uint32_t index) const;
+	bool add_folder(uint32_t index, const std::vector<LocalEntry> &entries);
 
 private:
 	// Appends `entries` as the contents of folder `index` (1-based parent).

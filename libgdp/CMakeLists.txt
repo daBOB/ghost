@@ -85,6 +85,7 @@ add_library(gdp STATIC
   src/remote_files.cpp
   src/remote_mount.cpp
   src/video_codec.cpp
+  src/worker.cpp
   src/refine.cpp
   src/video_reassembler.cpp
   src/client_connection.cpp
@@ -164,6 +165,10 @@ add_test(NAME gdp_clipboard_test COMMAND gdp_clipboard_test)
 add_executable(gdp_file_transfer_test tests/file_transfer_test.cpp)
 target_link_libraries(gdp_file_transfer_test PRIVATE gdp)
 add_test(NAME gdp_file_transfer_test COMMAND gdp_file_transfer_test)
+
+add_executable(gdp_worker_test tests/worker_test.cpp)
+target_link_libraries(gdp_worker_test PRIVATE gdp Threads::Threads)
+add_test(NAME gdp_worker_test COMMAND gdp_worker_test)
 
 add_executable(gdp_file_list_test tests/file_list_test.cpp)
 target_link_libraries(gdp_file_list_test PRIVATE gdp)

@@ -357,8 +357,8 @@ private:
 	std::unique_ptr<FileReceiver> files_;
 	IdleCoalescer files_close_;
 	// Serves the copied files the client asks for; null with [files] send
-	// off. last_list_empty_: an empty FileList (nothing copied) is sent
-	// only after one that wasn't.
+	// off. last_list_empty_: an empty FileList (nothing copied) is asked
+	// for only after one that wasn't.
 	std::unique_ptr<FileSender> file_sender_;
 	bool last_list_empty_ = true;
 	// file-clipboard: lists carry what is in copied folders.
