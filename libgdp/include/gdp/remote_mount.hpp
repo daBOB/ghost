@@ -115,4 +115,10 @@ private:
 	std::string directory_;
 };
 
+// Whether `path` is one of this process's mounts or inside one, by its
+// name alone: nothing is looked up, so it can't wait on the mount. What
+// reads local folders (gdp/file_list.hpp) leaves these out, since the
+// thread serving a mount is the one that would be reading it. Any thread.
+bool inside_own_mount(const std::string &path);
+
 } // namespace gdp

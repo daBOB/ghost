@@ -35,6 +35,40 @@ namespace gdp {
 
 namespace {
 
+// Every mount of this process's, as named and as the real path, for
+// inside_own_mount().
+std::mutex g_mounts_mutex;
+std::vector<std::string> g_mounts;
+
+bool under_path(const std::string &path, const std::string &dir) {
+	return path.compare(0, dir.size(), dir) == 0 && (path.size() == dir.size() || path[dir.size()] == '/');
+}
+
+// `directory`'s names, worked out before it is mounted (realpath() of a
+// mount would ask it), and registered.
+std::vector<std::string> register_mount(const std::string &directory) {
+	std::vector<std::string> names = {directory};
+	if (char *real = realpath(directory.c_str(), nullptr)) {
+		if (directory != real) {
+			names.push_back(real);
+		}
+		free(real);
+	}
+	std::lock_guard<std::mutex> lock(g_mounts_mutex);
+	g_mounts.insert(g_mounts.end(), names.begin(), names.end());
+	return names;
+}
+
+void unregister_mount(const std::vector<std::string> &names) {
+	std::lock_guard<std::mutex> lock(g_mounts_mutex);
+	for (const std::string &name : names) {
+		auto it = std::find(g_mounts.begin(), g_mounts.end(), name);
+		if (it != g_mounts.end()) {
+			g_mounts.erase(it);
+		}
+	}
+}
+
 // What the kernel keeps of an entry that never changes (a copied file).
 constexpr double kForeverSeconds = 3600;
 // How far past what a range has brought a read may be and still wait for
@@ -86,6 +120,7 @@ struct RemoteMount::Impl {
 
 	RemoteMount *owner = nullptr;
 	struct fuse_session *se = nullptr;
+	std::vector<std::string> names; // register_mount()'s
 	std::thread loop;
 	int wake_fd = -1; // owner: requests waiting
 	int stop_fd = -1; // loop: stop
@@ -592,7 +627,10 @@ bool RemoteMount::mount(const std::string &directory, std::string *error) {
 		*error = "fuse_session_new failed";
 		return false;
 	}
+	impl_->names = register_mount(directory);
 	if (fuse_session_mount(impl_->se, directory.c_str()) != 0) {
+		unregister_mount(impl_->names);
+		impl_->names.clear();
 		fuse_session_destroy(impl_->se);
 		impl_->se = nullptr;
 		*error = "can't mount on " + directory + " (is /dev/fuse there and fusermount3 installed?)";
@@ -631,6 +669,8 @@ void RemoteMount::unmount() {
 	i.files.clear();
 	i.ranges.clear();
 	rmdir(directory_.c_str());
+	unregister_mount(i.names);
+	i.names.clear();
 	directory_.clear();
 }
 
@@ -839,6 +879,16 @@ uint64_t RemoteMount::ranges_opened() const {
 	return impl_->ranges_opened;
 }
 
+bool inside_own_mount(const std::string &path) {
+	std::lock_guard<std::mutex> lock(g_mounts_mutex);
+	for (const std::string &dir : g_mounts) {
+		if (under_path(path, dir)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 } // namespace gdp
 
 #else // !GDP_HAVE_FUSE
@@ -883,6 +933,9 @@ void RemoteMount::range_data(uint64_t, const uint8_t *, size_t) {}
 void RemoteMount::range_end(uint64_t, int) {}
 uint64_t RemoteMount::ranges_opened() const {
 	return 0;
+}
+bool inside_own_mount(const std::string &) {
+	return false;
 }
 
 } // namespace gdp

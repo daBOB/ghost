@@ -6,9 +6,12 @@
 // thread reads the mount through ordinary file calls. Covers a whole file
 // read in order (one range), reads that jump about, a folder listed on
 // request, a shared folder re-listed when stale, a file that fails, one
-// shorter than listed, and that nothing can be written. Skipped where FUSE
+// shorter than listed, that nothing can be written, and that reading local
+// folders leaves the mount out. Skipped where FUSE
 // isn't built in or /dev/fuse can't be opened.
 #include "gdp/remote_mount.hpp"
+
+#include "gdp/file_list.hpp"
 
 #include <atomic>
 #include <cerrno>
@@ -108,7 +111,8 @@ int main() {
 	close(probe);
 
 	auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-	const std::string dir = (std::filesystem::temp_directory_path() / ("gdp_remote_mount_" + std::to_string(stamp))).string();
+	const std::string base = (std::filesystem::temp_directory_path() / ("gdp_remote_mount_" + std::to_string(stamp))).string();
+	const std::string dir = base + "/mnt";
 
 	const std::string big = pattern(6 << 20, 1), small = "small file\n", inner = "listed on request\n";
 	std::map<uint64_t, std::string> contents = {{1, big}, {2, small}, {3, inner}, {5, std::string(500, 'x')}};
@@ -239,6 +243,18 @@ int main() {
 		read_all(dir + "/clip/broken.bin", &err);
 		CHECK(err == EIO);
 		CHECK(read_all(dir + "/clip/short.bin", &err) == std::string(500, 'x') && err == 0);
+		step("own mount");
+		// The folder the mount is in (a share of $XDG_RUNTIME_DIR, or a copy
+		// of it): the mount is left out without being looked at. Checked here,
+		// where the owner still serves it, so that a regression fails rather
+		// than hangs: on the owner's thread, looking would wait forever.
+		CHECK(gdp::inside_own_mount(dir) && gdp::inside_own_mount(dir + "/clip/x") &&
+			!gdp::inside_own_mount(dir + "x"));
+		CHECK(gdp::read_local_folder(base).empty());
+		CHECK(gdp::resolve_beneath(base, "mnt").empty() && gdp::resolve_beneath(dir, "").empty());
+		gdp::LocalEntry own;
+		CHECK(!gdp::stat_local(dir, &own, true));
+		CHECK(gdp::LocalFileList::build(1, {base}, true).size() == 1);
 		step("read-only");
 		// Nothing goes in.
 		CHECK(open((dir + "/clip/small.txt").c_str(), O_WRONLY) < 0 && errno == EROFS);
@@ -295,6 +311,8 @@ int main() {
 	mount.unmount();
 	CHECK(!mount.mounted());
 	CHECK(!std::filesystem::exists(dir));
+	CHECK(!gdp::inside_own_mount(dir));
+	std::filesystem::remove(base);
 
 	if (g_failures) {
 		fprintf(stderr, "remote_mount_test: %d check(s) failed\n", g_failures.load());

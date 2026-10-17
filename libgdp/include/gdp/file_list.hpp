@@ -29,8 +29,8 @@ struct LocalEntry {
 session::FileListEntry to_list_entry(const LocalEntry &entry);
 
 // The local file or folder at `path` (UTF-8). False if it is neither (a
-// device, gone, or a symbolic link unless `follow`) or its name breaks
-// §7.12's rules. Something the user copied is followed (they picked the
+// device, gone, a symbolic link unless `follow`, or inside one of this
+// process's own mounts) or its name breaks §7.12's rules. Something the user copied is followed (they picked the
 // link, and mean what it points at); nothing found inside a folder is.
 bool stat_local(const std::string &path, LocalEntry *entry, bool follow = false);
 
@@ -40,8 +40,8 @@ bool stat_local(const std::string &path, LocalEntry *entry, bool follow = false)
 bool hidden_local(const std::string &path);
 
 // What is in the local folder at `path`, sorted by name: regular files and
-// folders with usable names only, and no hidden ones unless
-// `include_hidden`. Symbolic links are left out, so nothing reached through
+// folders with usable names only, none of this process's own mounts
+// (inside_own_mount()), and no hidden ones unless `include_hidden`. Symbolic links are left out, so nothing reached through
 // a list or a share leads outside what the user picked.
 std::vector<LocalEntry> read_local_folder(const std::string &path, bool include_hidden = true);
 
@@ -94,8 +94,9 @@ private:
 // A shared folder's `relative` path (gdp-spec.md §7.12: '/'-separated, each
 // part a valid name, "" for the folder itself) as a local path beneath
 // `root`, or "" if a part breaks the rules or anything on the way is a
-// symbolic link -- nothing a request names may lead outside `root` -- or,
-// unless `include_hidden`, is hidden (hidden_local()).
+// symbolic link -- nothing a request names may lead outside `root` -- or is
+// one of this process's own mounts, or, unless `include_hidden`, is hidden
+// (hidden_local()).
 std::string resolve_beneath(const std::string &root, const std::string &relative, bool include_hidden = true);
 
 } // namespace gdp

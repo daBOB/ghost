@@ -3,6 +3,8 @@
 
 #include "gdp/file_list.hpp"
 
+#include "gdp/remote_mount.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <deque>
@@ -105,6 +107,9 @@ session::FileListEntry to_list_entry(const LocalEntry &entry) {
 }
 
 bool stat_local(const std::string &path, LocalEntry *entry, bool follow) {
+	if (inside_own_mount(path)) {
+		return false; // the other end's files, which this thread may be serving
+	}
 	std::error_code ec;
 	fs::directory_entry de(fs_path(path), ec);
 	return !ec && entry_of(de, entry, follow);
@@ -134,7 +139,10 @@ std::vector<LocalEntry> read_local_folder(const std::string &path, bool include_
 	for (fs::directory_iterator it(fs_path(path), fs::directory_options::skip_permission_denied, ec), end;
 		 !ec && it != end; it.increment(ec)) {
 		LocalEntry entry;
-		if (!include_hidden && hidden_local(utf8_path(it->path()))) {
+		std::string child = utf8_path(it->path());
+		// One of our own mounts (a share of $XDG_RUNTIME_DIR, say) is left out
+		// before it is looked at: this thread may be the one serving it.
+		if (inside_own_mount(child) || (!include_hidden && hidden_local(child))) {
 			continue;
 		}
 		if (entry_of(*it, &entry)) {
@@ -266,6 +274,9 @@ bool LocalFileList::list_folder(uint32_t index, std::vector<session::FileListing
 }
 
 std::string resolve_beneath(const std::string &root, const std::string &relative, bool include_hidden) {
+	if (inside_own_mount(root)) {
+		return "";
+	}
 	fs::path path = fs_path(root);
 	std::error_code ec;
 	fs::file_status st = fs::symlink_status(path, ec);
@@ -280,6 +291,9 @@ std::string resolve_beneath(const std::string &root, const std::string &relative
 			return ""; // empty parts, ".", "..", separators and control characters
 		}
 		path /= fs_path(part);
+		if (inside_own_mount(utf8_path(path))) {
+			return "";
+		}
 		st = fs::symlink_status(path, ec);
 		if (ec || fs::is_symlink(st) || !(fs::is_directory(st) || fs::is_regular_file(st))) {
 			return "";
