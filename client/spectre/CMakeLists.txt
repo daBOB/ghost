@@ -130,6 +130,7 @@ add_executable(spectre
   src/main.cpp
   src/log.cpp
   src/prefs.cpp
+  src/net/file_transfers.cpp
   src/net/session_client.cpp
   src/net/lan_link.cpp
   src/decode/decoder.cpp

@@ -127,6 +127,7 @@ int main(int argc, char *argv[]) {
 	client.set_network_profile(profile);
 	client.set_requested_display(width, height);
 	client.set_lossless_refinement(refine);
+	client.set_file_transfer(false); // nothing here would send or fetch one
 
 	FILE *dump = nullptr;
 	if (!dump_path.empty() && !(dump = fopen(dump_path.c_str(), "wb"))) {
