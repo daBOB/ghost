@@ -14,6 +14,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <initializer_list>
 #include <vector>
 
 #include <fcntl.h>
@@ -135,6 +136,10 @@ struct GnomeClipboard::Impl {
 	GnomeClipboard *owner = nullptr;
 	sd_bus *bus = nullptr;
 	struct wl_event_loop *loop = nullptr;
+	// The mime to read from the latest owner, once the burst of owner
+	// changes it came in is over (empty: nothing to read).
+	std::string pending_mime;
+	struct wl_event_source *read_idle = nullptr;
 	struct wl_event_source *process_idle = nullptr;
 	std::string session_path;
 	sd_bus_slot *owner_changed_slot = nullptr;
@@ -152,15 +157,27 @@ struct GnomeClipboard::Impl {
 		if (!read_owner_changed(m, &mimes, &session_is_owner)) {
 			return 0;
 		}
-		if (session_is_owner) {
-			return 0; // the echo of our own SetSelection
+		// Whatever was being read belongs to an owner that is gone.
+		impl->owner->cancel_reads();
+		// Nothing to read from our own SetSelection's echo, nor from an
+		// owner offering nothing v1 carries (an image, a file list).
+		impl->pending_mime = session_is_owner ? std::string() : gdp::select_clipboard_mime(mimes);
+		if (!impl->pending_mime.empty() && !impl->read_idle) {
+			// Not now: more changes of the same copy may be queued behind
+			// this one.
+			impl->read_idle = wl_event_loop_add_idle(impl->loop, read_latest, impl);
 		}
-		std::string mime = gdp::select_clipboard_mime(mimes);
-		if (mime.empty()) {
-			return 0; // an image or a file list: nothing v1 carries
-		}
-		impl->read_selection(mime);
 		return 0;
+	}
+
+	static void read_latest(void *data) {
+		auto *impl = static_cast<Impl *>(data);
+		impl->read_idle = nullptr; // an idle source goes once it has run
+		std::string mime = std::move(impl->pending_mime);
+		impl->pending_mime.clear();
+		if (!mime.empty()) {
+			impl->read_selection(mime);
+		}
 	}
 
 	// An app in the session is pasting from the selection we own.
@@ -330,10 +347,13 @@ void GnomeClipboard::close() {
 			nullptr, nullptr, "");
 		i.clipboard_enabled = false;
 	}
-	if (i.process_idle) {
-		wl_event_source_remove(i.process_idle);
-		i.process_idle = nullptr;
+	for (struct wl_event_source **idle : {&i.read_idle, &i.process_idle}) {
+		if (*idle) {
+			wl_event_source_remove(*idle);
+			*idle = nullptr;
+		}
 	}
+	i.pending_mime.clear();
 	if (i.owner_changed_slot) {
 		sd_bus_slot_unref(i.owner_changed_slot);
 		i.owner_changed_slot = nullptr;
@@ -348,6 +368,10 @@ void GnomeClipboard::close() {
 void GnomeClipboard::read_pipe(int fd, const std::string &mime) {
 	pipes_.read(fd,
 		[this, mime](std::string raw) { note_local_text(gdp::decode_clipboard_text(mime, raw)); });
+}
+
+void GnomeClipboard::cancel_reads() {
+	pipes_.cancel_reads();
 }
 
 void GnomeClipboard::write_pipe(int fd, std::string payload, uint32_t serial) {

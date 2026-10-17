@@ -317,6 +317,14 @@ target_include_directories(wraith_path_rate_estimator_test PRIVATE src)
 target_compile_options(wraith_path_rate_estimator_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_path_rate_estimator_test COMMAND wraith_path_rate_estimator_test)
 
+# Clipboard transfers over pipes (session/clipboard_sync.hpp).
+add_executable(wraith_clipboard_pipes_test tests/clipboard_pipes_test.cpp src/session/clipboard_sync.cpp
+  src/util/log.cpp)
+target_include_directories(wraith_clipboard_pipes_test PRIVATE src)
+target_link_libraries(wraith_clipboard_pipes_test PRIVATE gdp PkgConfig::WAYLAND_SERVER)
+target_compile_options(wraith_clipboard_pipes_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_clipboard_pipes_test COMMAND wraith_clipboard_pipes_test)
+
 add_executable(wraith_session_profile_test tests/session_profile_test.cpp src/session/session_profile.cpp)
 target_include_directories(wraith_session_profile_test PRIVATE src)
 target_compile_options(wraith_session_profile_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
