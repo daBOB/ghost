@@ -82,6 +82,11 @@ if(GHOST_ENABLE_PYROWAVE)
 endif()
 
 option(GHOST_ENABLE_ASAN "Build with AddressSanitizer + UBSan" OFF)
+# Paste of files and shared folders through a FUSE mount (gdp-spec.md
+# §7.12, libgdp's RemoteMount): Linux only, and only where libfuse3 is
+# installed (`apt install libfuse3-dev`); without it both ends build and
+# simply don't offer what needs it.
+option(GHOST_ENABLE_FUSE "Mount the other end's files with FUSE when libfuse3 is installed" ON)
 if(GHOST_ENABLE_ASAN)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
   add_link_options(-fsanitize=address,undefined)

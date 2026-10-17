@@ -162,6 +162,16 @@ void test_copied_files() {
 	assert(gdp::copied_file_paths("text/uri-list", "file:///a%00b").empty());
 	assert((gdp::copied_file_paths("text/uri-list", "file:///100%zz") == V{"/100%zz"}));
 	assert(gdp::copied_file_paths("text/plain", "file:///a").empty());
+
+	// Offering copied files: encoded so they read back the same in each format.
+	const V paths = {"/run/user/1000/ghost/clip/1/My Files", "/tmp/\xe2\x9c\x93 100%.txt"};
+	assert(gdp::file_uri("/a b/%c") == "file:///a%20b/%25c");
+	assert(gdp::copied_files_offer_mime_types().front() == "x-special/gnome-copied-files");
+	std::string gnome = gdp::copied_files_payload("x-special/gnome-copied-files", paths);
+	assert(gnome.compare(0, 5, "copy\n") == 0);
+	assert(gdp::copied_file_paths("x-special/gnome-copied-files", gnome) == paths);
+	assert(gdp::copied_file_paths("text/uri-list", gdp::copied_files_payload("text/uri-list", paths)) == paths);
+	assert(gdp::copied_files_payload("text/plain", paths) == paths[0] + "\n" + paths[1]);
 }
 
 void test_frame_then_raw() {

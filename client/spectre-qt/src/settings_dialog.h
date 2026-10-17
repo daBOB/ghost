@@ -20,7 +20,7 @@ class SettingsDialog : public QDialog {
 	Q_OBJECT
 
 public:
-	// `debug` shows or hides the Debug group (tile-outline toggle etc.) --
+	// `debug` shows or hides the Debug tab (tile-outline toggle etc.) --
 	// it mirrors spectre-qt's own -D/--debug flag (main.cpp) so those
 	// options aren't in front of everyone by default.
 	explicit SettingsDialog(const SpectreSettings &settings, bool debug, QWidget *parent = nullptr);

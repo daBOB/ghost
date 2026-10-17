@@ -67,6 +67,13 @@ public:
 	// here, its callbacks still this receiver's until it sets its own.
 	// Unset, requests are refused as unsupported.
 	std::function<void(std::unique_ptr<gdp::Stream>, const gdp::session::FileRequest &)> on_request;
+	// Likewise a request for a folder's contents (file-clipboard).
+	std::function<void(std::unique_ptr<gdp::Stream>, const gdp::session::FileListingRequest &)> on_listing;
+	// And the client's answer to a FileFetch (file-clipboard, file-share):
+	// its FileReply and any bytes follow the opening frame at once, and
+	// those that came with it are `data`.
+	std::function<void(std::unique_ptr<gdp::Stream>, const gdp::session::FileAnswer &, std::vector<uint8_t> data)>
+		on_answer;
 
 	// Files stored, transfers still running: for logs and tests.
 	size_t files_saved() const { return files_saved_; }

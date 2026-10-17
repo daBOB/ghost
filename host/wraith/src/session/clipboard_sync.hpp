@@ -96,6 +96,13 @@ public:
 	// implementation does that by comparing against what it last set.
 	virtual void set_text(const std::string &utf8) = 0;
 
+	// Put files on the local clipboard, as a file manager's copy of them
+	// (gdp-spec.md §7.12, file-clipboard): `paths`, local paths -- into the
+	// mount of the client's files -- for a paste in the session to copy from.
+	// Taking the selection with these, like set_text(), must not come back
+	// as a local copy. A backend that can't does nothing.
+	virtual void set_files(const std::vector<std::string> &paths) { (void)paths; }
+
 	// Releases the mechanism (drops the selection, unbinds the protocol
 	// object, disables mutter's clipboard). The destructor does this too;
 	// the explicit call is for a host tearing a backend down in a
@@ -137,6 +144,10 @@ protected:
 	// What an implementation calls with whatever it read as `mime`
 	// (select_mime()'s choice): copied files, or text.
 	void note_local_payload(const std::string &mime, const std::string &raw);
+	// What an implementation calls once set_files() put the client's files
+	// on the clipboard: neither the text nor the files seen before are
+	// there any more, so a later session's push must not bring them back.
+	void note_peer_files();
 
 	ClipboardPipes pipes_;
 

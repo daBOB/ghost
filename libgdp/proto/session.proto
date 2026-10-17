@@ -37,8 +37,14 @@ message ControlEnvelope {
     // Support: the host asks the client what it knows (wraith --report).
     DiagnosticsRequest diagnostics_request = 17;
     DiagnosticsReport diagnostics_report = 18;
-    // Files the host's user copied, for the client to fetch (§7.12).
+    // Files a user copied, for the other end to fetch (§7.12): the host's,
+    // and with file-clipboard the client's too.
     FileList file_list = 19;
+    // file-clipboard, file-share: the host asks the client for one of its
+    // files, or a folder's contents; the client answers on a file stream.
+    FileFetch file_fetch = 20;
+    // file-share: a folder the client shares with the host, or stops sharing.
+    FileShare file_share = 21;
   }
 }
 
@@ -95,6 +101,7 @@ message SessionHello {
 
   // Informational.
   repeated string decoders = 12;       // e.g. "vulkan", "vaapi", "software", "d3d11va"
+  string client_name = 13;             // the client machine's name, e.g. "saiko-pc01"
 }
 
 // More a client can decode in one of its `codecs` (gdp-spec.md §7.3).
@@ -188,24 +195,72 @@ message StreamOpen {
 // FileReply{refused{FILE_ERROR_UNSUPPORTED}}.
 message FileOpen {
   oneof open {
-    FileOffer offer = 1;     // client -> host: here is a file
-    FileRequest request = 2; // host -> client: send me this one of the FileList
+    FileOffer offer = 1;            // client -> host: here is a file
+    FileRequest request = 2;        // host -> client: send me this one of the FileList
+    FileListingRequest listing = 3; // file-clipboard: what is in this folder of the host's FileList
+    FileAnswer answer = 4;          // file-clipboard, file-share: the answer to a FileFetch follows
   }
 }
 
-// host -> client, on the control stream: the files the host's user copied.
-// Sent when the host's clipboard comes to hold copied files, with no files
-// when it no longer does, and once right after SessionAccept if it does.
+// On the control stream: the files a user copied. host -> client always;
+// client -> host with file-clipboard. Sent when the clipboard comes to hold
+// copied files, with no files when it no longer does, and once right after
+// SessionAccept if it does.
 message FileList {
-  uint64 list_id = 1;               // new with every list; never 0
-  repeated FileListEntry files = 2; // in the order the user copied them
+  uint64 list_id = 1;               // new with every list from that end; never 0
+  repeated FileListEntry files = 2; // what was copied, in order; with file-clipboard, then what is in its folders
 }
 
 message FileListEntry {
   string name = 1;              // the file's own name, §7.12's rules
   uint64 size = 2;              // when the list was made; FileSending says what is sent
   int64 modified_unix_ms = 3;   // 0 = unknown
-  bool directory = 4;           // a folder: not sent in this version
+  bool directory = 4;           // a folder
+  // file-clipboard:
+  uint32 parent = 5;            // 0: one of the things copied; else 1 + the index of the folder it is in
+  bool unlisted = 6;            // a folder whose contents aren't in the list: ask for them (FileListingRequest)
+}
+
+// file-clipboard: the contents of folder `index` of list `list_id`.
+message FileListingRequest {
+  uint64 list_id = 1;
+  uint32 index = 2;
+}
+
+// A folder's contents (FileReply.listing): its entries, which take the
+// indices from `first_index` on in their list (a shared folder's have none).
+// One or more of these, then FIN.
+message FileListing {
+  uint32 first_index = 1;
+  repeated FileListEntry files = 2;
+}
+
+// host -> client, on the control stream (file-clipboard, file-share): send
+// one of your files, or a folder's contents. The client opens a "file"
+// stream whose FileOpen is FileAnswer{fetch_id} and writes, after it, one
+// FileReply (sending and the bytes, listing, or refused), then FIN.
+message FileFetch {
+  uint64 fetch_id = 1;   // new with every fetch; names the answering stream
+  uint64 list_id = 2;    // one of the client's FileLists ...
+  uint32 index = 3;      // ... and an entry in it
+  uint64 offset = 4;     // as FileRequest
+  uint64 length = 5;     // as FileRequest
+  bool listing = 6;      // a folder's contents (FileListing), not bytes
+  // file-share: instead of list_id and index, a path in a shared folder.
+  uint64 share_id = 7;
+  string path = 8;       // '/'-separated parts, each a valid name; "" the shared folder itself
+}
+
+message FileAnswer {
+  uint64 fetch_id = 1;
+}
+
+// client -> host, on the control stream (file-share): a folder the client's
+// user shares, read-only, for the life of the session; `removed` takes it back.
+message FileShare {
+  uint64 share_id = 1;   // new with every share; never 0
+  string name = 2;       // what the host shows it as; §7.12's name rules
+  bool removed = 3;
 }
 
 message FileRequest {
@@ -229,6 +284,7 @@ message FileReply {
     FileSaved saved = 3;        // every byte written and the file in place; FIN follows
     FileError failed = 4;       // accepted, then failed; FIN follows
     FileSending sending = 5;    // to a FileRequest: the file's raw bytes follow, then FIN
+    FileListing listing = 6;    // to a listing: a folder's contents, possibly in several frames, then FIN
   }
 }
 

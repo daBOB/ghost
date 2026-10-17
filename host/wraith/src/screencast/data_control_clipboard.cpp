@@ -32,6 +32,9 @@ struct DataControlClipboard::Impl {
 	// against: the compositor hands our own source's offer straight back
 	// to us, and that read must not look like a fresh local copy.
 	std::string own_text;
+	// Or the copied files it serves (set_files()), whose offer the
+	// compositor hands back to us just the same.
+	std::vector<std::string> own_files;
 	// Mime types each live offer advertised, keyed by the offer proxy.
 	// An offer's `offer` events all arrive before the selection event
 	// that hands it over.
@@ -90,7 +93,9 @@ struct DataControlClipboard::Impl {
 			::close(fd);
 			return;
 		}
-		impl->owner->write_pipe(fd, clipboard_payload_for_mime(impl->own_text, mime_type));
+		impl->owner->write_pipe(fd, impl->own_files.empty()
+				? clipboard_payload_for_mime(impl->own_text, mime_type)
+				: gdp::copied_files_payload(mime_type ? mime_type : "", impl->own_files));
 	}
 
 	static void on_source_cancelled(void *data, struct ext_data_control_source_v1 *source) {
@@ -103,6 +108,7 @@ struct DataControlClipboard::Impl {
 		ext_data_control_source_v1_destroy(impl->source);
 		impl->source = nullptr;
 		impl->own_text.clear();
+		impl->own_files.clear();
 	}
 
 	void drop_offer(struct ext_data_control_offer_v1 *offer) {
@@ -227,10 +233,10 @@ void DataControlClipboard::close() {
 void DataControlClipboard::read_pipe(int fd, const std::string &mime) {
 	pipes_.read(fd, [this, mime](std::string raw) {
 		// The compositor hands our own source's offer back to us like any
-		// other client's; that is our set_text(), not a copy. (Ours offers
-		// only text, so a file list is never one.)
+		// other client's; that is our set_text() or set_files(), not a copy.
 		bool files = !gdp::select_copied_files_mime({mime}).empty();
-		if (!files && gdp::decode_clipboard_text(mime, raw) == impl_->own_text) {
+		if (files ? !impl_->own_files.empty() && gdp::copied_file_paths(mime, raw) == impl_->own_files
+				  : gdp::decode_clipboard_text(mime, raw) == impl_->own_text) {
 			return;
 		}
 		note_local_payload(mime, raw);
@@ -247,19 +253,41 @@ void DataControlClipboard::set_text(const std::string &utf8) {
 		return;
 	}
 	i.own_text = utf8;
+	i.own_files.clear();
+	// The whole offer set, not just text/plain: pastes into older
+	// GTK/X11/Xwayland apps silently fail otherwise (gdp/clipboard.hpp).
+	if (!offer(gdp::clipboard_offer_mime_types())) {
+		return;
+	}
+	// Record it as the last thing seen too, so a later session's initial
+	// push doesn't hand a peer back text that peer just sent.
+	note_local_text(utf8);
+}
 
+void DataControlClipboard::set_files(const std::vector<std::string> &paths) {
+	Impl &i = *impl_;
+	if (!i.manager || !i.device || paths.empty()) {
+		return;
+	}
+	i.own_text.clear();
+	i.own_files = paths;
+	if (offer(gdp::copied_files_offer_mime_types())) {
+		note_peer_files();
+	}
+}
+
+bool DataControlClipboard::offer(const std::vector<std::string> &mimes) {
+	Impl &i = *impl_;
 	struct ext_data_control_source_v1 *source = ext_data_control_manager_v1_create_data_source(i.manager);
 	if (!source) {
-		return;
+		return false;
 	}
 	static const struct ext_data_control_source_v1_listener source_listener = {
 		.send = Impl::on_source_send,
 		.cancelled = Impl::on_source_cancelled,
 	};
 	ext_data_control_source_v1_add_listener(source, &source_listener, &i);
-	// The whole offer set, not just text/plain: pastes into older
-	// GTK/X11/Xwayland apps silently fail otherwise (gdp/clipboard.hpp).
-	for (const std::string &mime : gdp::clipboard_offer_mime_types()) {
+	for (const std::string &mime : mimes) {
 		ext_data_control_source_v1_offer(source, mime.c_str());
 	}
 
@@ -276,9 +304,7 @@ void DataControlClipboard::set_text(const std::string &utf8) {
 		ext_data_control_source_v1_destroy(previous);
 	}
 	i.client->flush();
-	// Record it as the last thing seen too, so a later session's initial
-	// push doesn't hand a peer back text that peer just sent.
-	note_local_text(utf8);
+	return true;
 }
 
 } // namespace wraith

@@ -31,6 +31,7 @@ Build-Depends:
  libxkbcommon-dev,
  libzstd-dev,
  libei-dev,
+ libfuse3-dev,
  libngtcp2-dev,
  libngtcp2-crypto-ossl-dev,
  libopus-dev,
@@ -45,7 +46,7 @@ Homepage: https://github.com/saiko/ghost
 Package: ghostd
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, ghostauth (= ${binary:Version}), libpam-runtime, openssl, systemd
-Recommends: foot, labwc, mesa-va-drivers, pipewire, xwayland
+Recommends: foot, fuse3, labwc, mesa-va-drivers, pipewire, xwayland
 Description: Ghost host: remote desktop sessions over GDP
  ghostd authenticates GDP clients against PAM (through ghostauth) and
  starts a graphical session for each login, hosted by wraith: capture,
@@ -79,7 +80,7 @@ Description: Veil: the Ghost broker and web UI
 Package: spectre
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Recommends: mesa-va-drivers, mesa-vulkan-drivers
+Recommends: fuse3, mesa-va-drivers, mesa-vulkan-drivers
 Description: Ghost client: spectre and its Qt launcher
  spectre is the GDP client: it connects to a Ghost host, decodes the video
  (VA-API, Vulkan Video or software) and sends input back. spectre-qt is the

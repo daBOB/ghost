@@ -168,6 +168,8 @@ add_executable(wraith
   src/session/path_rate_estimator.cpp
   src/session/leader_host.cpp
   src/session/clipboard_sync.cpp
+  src/session/client_files.cpp
+  src/session/file_bookmarks.cpp
   src/session/file_receiver.cpp
   src/session/file_sender.cpp
   src/session/hid_evdev.cpp
@@ -323,6 +325,28 @@ target_link_libraries(wraith_file_sender_test PRIVATE gdp PkgConfig::WAYLAND_SER
   PkgConfig::LIBSYSTEMD Threads::Threads)
 target_compile_options(wraith_file_sender_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_file_sender_test COMMAND wraith_file_sender_test)
+
+# Paste of the host's copied files through the client's FUSE mount
+# (gdp::RemoteFiles against FileSender); skipped without FUSE.
+add_executable(wraith_remote_files_test tests/remote_files_test.cpp src/session/file_sender.cpp
+  src/session/file_receiver.cpp src/util/config.cpp src/util/log.cpp)
+target_include_directories(wraith_remote_files_test PRIVATE src)
+target_link_libraries(wraith_remote_files_test PRIVATE gdp PkgConfig::WAYLAND_SERVER PkgConfig::TOMLPLUSPLUS
+  PkgConfig::LIBSYSTEMD Threads::Threads)
+target_compile_options(wraith_remote_files_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_remote_files_test COMMAND wraith_remote_files_test)
+
+# The client's copied files and shared folder on the host (ClientFiles
+# against spectre's LocalFiles), with the sidebar entries; skipped without
+# FUSE.
+add_executable(wraith_client_files_test tests/client_files_test.cpp src/session/client_files.cpp
+  src/session/file_bookmarks.cpp src/session/file_receiver.cpp src/util/config.cpp src/util/log.cpp
+  ${CMAKE_SOURCE_DIR}/client/spectre/src/net/local_files.cpp ${CMAKE_SOURCE_DIR}/client/spectre/src/log.cpp)
+target_include_directories(wraith_client_files_test PRIVATE src ${CMAKE_SOURCE_DIR}/client/spectre/src)
+target_link_libraries(wraith_client_files_test PRIVATE gdp PkgConfig::WAYLAND_SERVER PkgConfig::TOMLPLUSPLUS
+  PkgConfig::LIBSYSTEMD Threads::Threads)
+target_compile_options(wraith_client_files_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME wraith_client_files_test COMMAND wraith_client_files_test)
 
 # The bitrate controller (session/rate_controller.hpp) against synthetic
 # reports. Links gdp for session.proto's NetworkProfile enum.

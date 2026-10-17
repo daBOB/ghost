@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 struct wl_event_loop;
 
@@ -38,6 +39,7 @@ public:
 	~DataControlClipboard() override;
 
 	void set_text(const std::string &utf8) override;
+	void set_files(const std::vector<std::string> &paths) override;
 	void close() override;
 
 private:
@@ -49,6 +51,8 @@ private:
 	// function of this one).
 	void read_pipe(int fd, const std::string &mime);
 	void write_pipe(int fd, std::string payload);
+	// Takes the selection with a new source offering `mimes`.
+	bool offer(const std::vector<std::string> &mimes);
 
 	std::unique_ptr<Impl> impl_;
 };

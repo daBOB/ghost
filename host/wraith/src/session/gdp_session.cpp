@@ -100,6 +100,8 @@ std::string join(const std::vector<std::string> &list) {
 GdpSession::GdpSession(SessionHost &host, TokenValidator token_validator, const std::string &control_socket,
 	bool gamepads, bool raw_controllers)
 	: host_(host), token_validator_(std::move(token_validator)), control_socket_(control_socket) {
+	// Sidebar entries for shared folders a wraith that died left behind.
+	ClientFiles::clean_up_after_crash();
 	if (!control_socket.empty() && gamepads) {
 		gamepads_ = std::make_unique<GamepadDevices>(control_socket);
 	}
@@ -156,6 +158,8 @@ void GdpSession::dispatch() {
 // invoking it, so destroying the Peer (and its Connection) from inside one
 // is fine too. reject_pending()/remove_pending() rely on the same contract.
 void GdpSession::reset_session(uint64_t error_code) {
+	// The client's files go with it: off the clipboard's reach and unmounted.
+	client_files_.reset();
 	// Partial files go with the client that was sending them.
 	files_close_.cancel();
 	file_sender_.reset();
@@ -526,6 +530,12 @@ void GdpSession::handle_control_data(Peer *peer, const uint8_t *data, size_t len
 			}
 		} else if (env.has_clipboard()) {
 			handle_clipboard_data(env.clipboard());
+		} else if (env.has_file_list()) {
+			handle_client_file_list(env.file_list());
+		} else if (env.has_file_share()) {
+			if (client_files_ && gdp::has_capability(capabilities_, gdp::kCapabilityFileShare)) {
+				client_files_->share(env.file_share());
+			}
 		} else if (env.has_refine_pause()) {
 			// gdp-spec.md §7.8: only on a session
 			// that negotiated it; dropped otherwise.
@@ -589,14 +599,28 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 			ten_bit_codecs.push_back(format.codec());
 		}
 	}
+	client_name_ = ClientFiles::usable_client_name(hello.client_name());
 	negotiation_summary_ = "client offered codecs: " + join(offered_codecs) +
 		"\nclient decodes 10-bit: " + join(ten_bit_codecs) +
 		"\nclient decoders: " + join(to_vector(hello.decoders())) +
+		"\nclient name: " + (client_name_.empty() ? "(none)" : client_name_) +
 		"\nhost can encode: " + join(SessionServices::supported_video_codecs()) +
 		"\nconnection: " + (hello.via_gateway() ? "via a gateway (pyrowave is never used)" : "direct");
 	video_codec_.clear();
 	file_directory_ = file_receive_directory();
 	capabilities_ = gdp::negotiate_capabilities(to_vector(hello.capabilities()), supported_capabilities());
+	// gdp-spec.md §7.12: file-clipboard builds on file and clipboard,
+	// file-share on file; neither is in effect without them.
+	{
+		bool file = gdp::has_capability(capabilities_, gdp::kCapabilityFile);
+		bool clipboard = gdp::has_capability(capabilities_, gdp::kCapabilityClipboard);
+		capabilities_.erase(std::remove_if(capabilities_.begin(), capabilities_.end(),
+								[&](const std::string &c) {
+									return (c == gdp::kCapabilityFileClipboard && !(file && clipboard)) ||
+										(c == gdp::kCapabilityFileShare && !file);
+								}),
+			capabilities_.end());
+	}
 	codec_formats_.clear();
 	for (const auto &format : hello.codec_formats()) {
 		gdp::CodecFormat declared;
@@ -666,11 +690,11 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 		reset_session(static_cast<uint64_t>(gdp::ErrorCode::kNoCommonCodec));
 		return false;
 	}
-	WLOG_INFO("gdp: session codec %s at %u bits, %s (client decoders: %s), capabilities: %s, %s",
+	WLOG_INFO("gdp: session codec %s at %u bits, %s (client %s, decoders: %s), capabilities: %s, %s",
 		video_codec_.c_str(), services.session_bit_depth(),
 		session_matrix(video_codec_) == ColorMatrix::Bt709 ? "BT.709" : "BT.601",
-		join(to_vector(hello.decoders())).c_str(), join(capabilities_).c_str(),
-		hello.via_gateway() ? "via gateway" : "direct");
+		client_name_.empty() ? "unnamed" : client_name_.c_str(), join(to_vector(hello.decoders())).c_str(),
+		join(capabilities_).c_str(), hello.via_gateway() ? "via gateway" : "direct");
 
 	authenticated_ = true;
 	services.set_viewer_attached(true);
@@ -819,6 +843,18 @@ std::vector<std::string> GdpSession::supported_capabilities() const {
 	// A download directory to put files in, checked as the client attaches.
 	if (!file_directory_.empty()) {
 		supported.push_back(gdp::kCapabilityFile);
+		// Both need the client's files mounted: a client that negotiated
+		// file-clipboard no longer sends its copies as text, so offering it
+		// without a mount would lose them (fuse3 is only recommended).
+		bool mount = ClientFiles::can_mount();
+		// Folders listed and the client's copies taken: with the clipboard
+		// (dropped after negotiation otherwise).
+		if (mount && host_.session().clipboard_available()) {
+			supported.push_back(gdp::kCapabilityFileClipboard);
+		}
+		if (mount && config().files.shares) {
+			supported.push_back(gdp::kCapabilityFileShare);
+		}
 	}
 	return supported;
 }
@@ -839,6 +875,23 @@ void GdpSession::start_file_receiver() {
 	};
 	active_->conn->allow_streams(gdp::kFileStreamsAtOnce);
 	WLOG_INFO("gdp: files from the client go to %s", file_directory_.c_str());
+	file_tree_ = gdp::has_capability(capabilities_, gdp::kCapabilityFileClipboard);
+	if (file_tree_ || gdp::has_capability(capabilities_, gdp::kCapabilityFileShare)) {
+		client_files_ = std::make_unique<ClientFiles>(
+			host_.event_loop(),
+			[this](const gdp::session::FileFetch &fetch) {
+				gdp::session::ControlEnvelope env;
+				*env.mutable_file_fetch() = fetch;
+				send_control(env);
+			},
+			config().files.bookmarks, client_name_);
+		files_->on_answer = [this](std::unique_ptr<gdp::Stream> stream, const gdp::session::FileAnswer &answer,
+								std::vector<uint8_t> data) {
+			if (client_files_) {
+				client_files_->answer(std::move(stream), answer, std::move(data));
+			}
+		};
+	}
 	// The files the user copies are clipboard content (gdp-spec.md §7.12):
 	// listed only to a client that syncs the clipboard too.
 	if (config().files.send && gdp::has_capability(capabilities_, gdp::kCapabilityClipboard)) {
@@ -851,6 +904,14 @@ void GdpSession::start_file_receiver() {
 				file_sender_->serve(std::move(stream), request);
 			}
 		};
+		if (file_tree_) {
+			files_->on_listing = [this](std::unique_ptr<gdp::Stream> stream,
+									 const gdp::session::FileListingRequest &request) {
+				if (file_sender_) {
+					file_sender_->serve_listing(std::move(stream), request);
+				}
+			};
+		}
 		hook_copied_files();
 	}
 }
@@ -872,13 +933,40 @@ void GdpSession::copied_files_changed(const std::vector<std::string> &paths) {
 	if (!authenticated_ || !file_sender_) {
 		return;
 	}
-	if (paths.empty() && last_list_empty_) {
+	// The client's own files, which we put on the clipboard (or a clipboard
+	// manager that took them over), are not the user's copy: listing them
+	// would also read our own mount from the loop that serves it.
+	std::vector<std::string> local;
+	for (const std::string &p : paths) {
+		if (!client_files_ || !client_files_->contains(p)) {
+			local.push_back(p);
+		}
+	}
+	if (!paths.empty() && local.empty()) {
+		return;
+	}
+	if (local.empty() && last_list_empty_) {
 		return; // nothing listed, nothing to take back
 	}
-	gdp::session::ControlEnvelope env;
-	*env.mutable_file_list() = file_sender_->set_list(paths);
-	last_list_empty_ = env.file_list().files_size() == 0;
-	send_control(env);
+	// What was asked for, not what comes of it: a copy taken back before its
+	// list is built must still send the empty one.
+	last_list_empty_ = local.empty();
+	file_sender_->set_list(local, file_tree_, [this](const gdp::session::FileList &list) {
+		gdp::session::ControlEnvelope env;
+		*env.mutable_file_list() = list;
+		send_control(env);
+	});
+}
+
+void GdpSession::handle_client_file_list(const gdp::session::FileList &list) {
+	if (!client_files_ || !file_tree_) {
+		return; // not negotiated: dropped, like any un-negotiated message
+	}
+	std::vector<std::string> paths = client_files_->add_list(list);
+	ClipboardSink *clipboard = host_.session().clipboard();
+	if (!paths.empty() && clipboard) {
+		clipboard->set_files(paths);
+	}
 }
 
 void GdpSession::clipboard_sink_changed() {

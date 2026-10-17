@@ -199,6 +199,48 @@ std::string local_path(const std::string &uri) {
 
 } // namespace
 
+const std::vector<std::string> &copied_files_offer_mime_types() {
+	static const std::vector<std::string> mimes = {kGnomeCopiedFiles, kUriList, "text/plain;charset=utf-8",
+		"text/plain"};
+	return mimes;
+}
+
+std::string file_uri(const std::string &path) {
+	static const char *hex = "0123456789ABCDEF";
+	std::string uri = "file://";
+	for (unsigned char c : path) {
+		bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' ||
+			c == '-' || c == '.' || c == '_' || c == '~';
+		if (plain) {
+			uri += static_cast<char>(c);
+		} else {
+			uri += '%';
+			uri += hex[c >> 4];
+			uri += hex[c & 15];
+		}
+	}
+	return uri;
+}
+
+std::string copied_files_payload(const std::string &mime, const std::vector<std::string> &paths) {
+	std::string payload;
+	if (mime == kGnomeCopiedFiles) {
+		payload = "copy";
+		for (const std::string &p : paths) {
+			payload += "\n" + file_uri(p);
+		}
+	} else if (mime == kUriList) {
+		for (const std::string &p : paths) {
+			payload += file_uri(p) + "\r\n";
+		}
+	} else {
+		for (const std::string &p : paths) {
+			payload += (payload.empty() ? "" : "\n") + p;
+		}
+	}
+	return payload;
+}
+
 std::string select_copied_files_mime(const std::vector<std::string> &offered) {
 	for (const char *mime : {kGnomeCopiedFiles, kUriList}) {
 		for (const std::string &o : offered) {

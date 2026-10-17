@@ -15,21 +15,30 @@ extern "C" {
 #include "app_icon_png.h"
 #include "decode/codec_support.hpp"
 #include "gdp/clock.hpp"
+#include "gdp/file_transfer.hpp"
+#include "gdp/framing.hpp"
 #include "gdp/negotiation.hpp"
 #include "gdp/refine.hpp"
 #include "log.hpp"
+#include "net/clipboard_files.hpp"
 #include "net/lan_link.hpp"
+#include "net/my_folders.hpp"
 #include "session.pb.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <poll.h>
 #include <signal.h>
+#include <unistd.h>
 #endif
 
 namespace spectre {
@@ -80,14 +89,22 @@ constexpr uint64_t kIndicatorFadeUs = 400'000;
 // EventQueue), so the main loop there just sleeps a fixed short interval and
 // dispatches unconditionally instead -- dispatch() is safe to call
 // speculatively even when nothing's pending (gdp/transport.hpp).
+// `others`: more fds to wake for, -1 for none.
 #ifdef _WIN32
-void wait_for_notify(int /*fd*/, int timeout_ms) {
+void wait_for_notify(int /*fd*/, int timeout_ms, std::initializer_list<int> /*others*/ = {}) {
 	Sleep((DWORD)timeout_ms);
 }
 #else
-void wait_for_notify(int fd, int timeout_ms) {
-	struct pollfd pfd{fd, POLLIN, 0};
-	poll(&pfd, 1, timeout_ms);
+void wait_for_notify(int fd, int timeout_ms, std::initializer_list<int> others = {}) {
+	struct pollfd pfds[4];
+	nfds_t n = 0;
+	pfds[n++] = {fd, POLLIN, 0};
+	for (int other : others) {
+		if (other >= 0 && n < 4) {
+			pfds[n++] = {other, POLLIN, 0};
+		}
+	}
+	poll(pfds, n, timeout_ms);
 }
 #endif
 
@@ -122,6 +139,8 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	client_.on_clipboard_text = [this](const std::string &utf8) { on_clipboard_text(utf8); };
 	client_.on_displays_changed = [this](const DisplayInfo &d) { on_displays_changed(d); };
 	client_.on_diagnostics_request = [this] { return diagnostics_text(); };
+	client_.on_file_list = [this](const gdp::session::FileList &list) { on_host_file_list(list); };
+	client_.on_file_fetch = [this](const gdp::session::FileFetch &fetch) { local_files_.answer(fetch); };
 	files_.on_uploaded = [this](const std::string &name, const std::string &where) {
 		toast_.show(where.empty() ? "Sent " + name : "Sent " + name + " to " + where, gdp::monotonic_us(),
 			4000000);
@@ -159,6 +178,12 @@ StreamSession::~StreamSession() {
 	// SDL_Quit() already tore the video/audio subsystems down. Every
 	// close() here is a no-op on something never opened.
 	av_frame_free(&pending_frame_);
+	// The mount goes before SDL: the clipboard may still offer paths into it.
+	if (own_files_offer_ && sdl_initialized_) {
+		SDL_ClearClipboardData();
+	}
+	host_files_.stop();
+	local_files_.cancel_all();
 	decoder_.close();
 	presenter_.shutdown();
 	microphone_.close();
@@ -336,6 +361,7 @@ bool StreamSession::connect_and_wait_for_accept() {
 	// to raw later, but a capability can't be added after SessionAccept.
 	client_.set_raw_controllers(true);
 	client_.set_microphone(options_.microphone);
+	client_.set_file_share(!options_.shared_folders.empty() || options_.share_my_files);
 	if (!client_.connect(options_.host, options_.port, options_.token, options_.cert_sha256)) {
 		SLOG_ERROR("spectre: connect() failed locally");
 		return false;
@@ -398,6 +424,10 @@ bool StreamSession::open_window() {
 	if (pending_clipboard_) {
 		apply_clipboard_text(*pending_clipboard_);
 		pending_clipboard_.reset();
+	}
+	if (pending_files_offer_) {
+		offer_files_on_clipboard(*pending_files_offer_);
+		pending_files_offer_.reset();
 	}
 
 	// Whose session on which host, for the window title and the menu's
@@ -595,8 +625,12 @@ void StreamSession::main_loop() {
 		}
 #endif
 
-		wait_for_notify(client_.notify_fd(), 4);
+		wait_for_notify(client_.notify_fd(), 4,
+			{host_files_.running() ? host_files_.notify_fd() : -1, local_files_.notify_fd()});
 		client_.dispatch();
+		host_files_.dispatch();
+		local_files_.dispatch();
+		host_files_.tick(gdp::monotonic_us());
 		present_pending_frame();
 
 		uint64_t now_us = gdp::monotonic_us();
@@ -619,6 +653,9 @@ void StreamSession::main_loop() {
 			mark_ui_dirty();
 		}
 		files_.tick(now_us);
+		if (next_my_scan_us_ != 0 && now_us >= next_my_scan_us_) {
+			rescan_my_folders();
+		}
 		if (follow_due_us_ != 0 && now_us >= follow_due_us_) {
 			follow_due_us_ = 0;
 			follow_window();
@@ -651,6 +688,7 @@ void StreamSession::on_accepted(const SessionInfo &session, const DisplayInfo &d
 	session_info_ = session;
 	display_ = display;
 	audio_info_ = audio;
+	share_folders();
 }
 
 void StreamSession::on_displays_changed(const DisplayInfo &display) {
@@ -814,6 +852,12 @@ void StreamSession::on_disconnected(const std::string &reason) {
 	disconnected_ = true;
 	disconnect_reason_ = reason;
 	files_.cancel_all();
+	local_files_.cancel_all();
+	if (own_files_offer_ && sdl_initialized_) {
+		SDL_ClearClipboardData(); // paths into a mount about to go
+		own_files_offer_ = false;
+	}
+	host_files_.stop();
 }
 
 bool StreamSession::on_video_frame(const uint8_t *data, size_t len) {
@@ -1048,7 +1092,7 @@ void StreamSession::handle_event(const SDL_Event &event) {
 	case SDL_EVENT_MOUSE_MOTION: handle_mouse_motion(event.motion); break;
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 	case SDL_EVENT_MOUSE_BUTTON_UP: handle_mouse_button(event.button); break;
-	case SDL_EVENT_CLIPBOARD_UPDATE: handle_clipboard_update(); break;
+	case SDL_EVENT_CLIPBOARD_UPDATE: handle_clipboard_update(event.clipboard); break;
 	case SDL_EVENT_DROP_FILE: handle_drop_file(event.drop.data); break;
 	case SDL_EVENT_MOUSE_WHEEL:
 		if (menu_.visible() || pointer_on_toolbar_) {
@@ -1329,8 +1373,16 @@ void StreamSession::close_gamepads() {
 	}
 }
 
-void StreamSession::handle_clipboard_update() {
-	if (!client_.clipboard_enabled() || !SDL_HasClipboardText()) {
+void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
+	if (event.owner) {
+		// Our own SDL_SetClipboardText or files offer: not a local copy.
+		return;
+	}
+	own_files_offer_ = false;
+	if (!client_.clipboard_enabled()) {
+		return;
+	}
+	if (announce_local_files() || !SDL_HasClipboardText()) {
 		return;
 	}
 	// The text variants (rather than the generic SDL_SetClipboardData) do
@@ -1346,6 +1398,205 @@ void StreamSession::handle_clipboard_update() {
 	// drops it either way.
 	client_.send_clipboard(text);
 	SDL_free(text);
+}
+
+namespace {
+
+// Where the host's copied files are mounted: this process's own folder
+// under the user's runtime directory. Empty where there's no FUSE.
+std::string host_files_directory() {
+#ifdef _WIN32
+	return "";
+#else
+	const char *runtime = getenv("XDG_RUNTIME_DIR");
+	std::string base = runtime && *runtime ? std::string(runtime) + "/spectre"
+										   : "/tmp/spectre-" + std::to_string(getuid());
+	return base + "/" + std::to_string(getpid());
+#endif
+}
+
+} // namespace
+
+void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
+	if (!host_files_.running()) {
+		if (list.files_size() == 0 || host_files_failed_) {
+			return;
+		}
+		std::string dir = host_files_directory();
+		std::string error = "this build has no FUSE";
+		if (!gdp::RemoteFiles::supported() || dir.empty() || !host_files_.start(dir, &error)) {
+			// Once: a host copy then simply doesn't reach this client.
+			SLOG_ERROR("files: the host's copied files can't be pasted here: %s", error.c_str());
+			host_files_failed_ = true;
+			return;
+		}
+		SLOG_INFO("files: the host's copied files are mounted at %s", dir.c_str());
+	}
+	std::vector<std::string> paths = host_files_.add_list(list, client_.file_clipboard_enabled());
+	if (paths.empty()) {
+		// The host's clipboard holds something else (no files). What we
+		// offered stays until something replaces it -- the host's text,
+		// which comes right behind this, or a local copy -- as text does
+		// (gdp-spec.md §7.9: no "clear"). Clearing it here would empty the
+		// clipboard for a moment, and a clipboard manager that never lets
+		// it be empty (Klipper) would put its previous entry back over the
+		// text that follows, and that entry would go to the host as a copy.
+		pending_files_offer_.reset();
+		return;
+	}
+	if (!sdl_initialized_) {
+		pending_files_offer_ = paths;
+		return;
+	}
+	offer_files_on_clipboard(paths);
+}
+
+void StreamSession::offer_files_on_clipboard(const std::vector<std::string> &paths) {
+	offered_files_ = paths;
+	offered_payloads_.clear();
+	// GTK file managers' own format first, then the standard one, then the
+	// paths as text for anything else.
+	std::vector<const char *> mimes;
+	for (const std::string &m : gdp::copied_files_offer_mime_types()) {
+		mimes.push_back(m.c_str());
+	}
+	auto data = [](void *self, const char *mime, size_t *size) -> const void * {
+		return static_cast<StreamSession *>(self)->clipboard_files_data(mime, size);
+	};
+	auto cleanup = [](void *self) { static_cast<StreamSession *>(self)->own_files_offer_ = false; };
+	if (SDL_SetClipboardData(data, cleanup, this, mimes.data(), mimes.size())) {
+		own_files_offer_ = true;
+		SLOG_INFO("files: %zu of the host's copied file(s) on the clipboard", paths.size());
+	} else {
+		SLOG_ERROR("files: SDL_SetClipboardData failed: %s", SDL_GetError());
+	}
+}
+
+const void *StreamSession::clipboard_files_data(const char *mime, size_t *size) {
+	*size = 0;
+	if (!mime) {
+		return nullptr;
+	}
+	auto it = offered_payloads_.find(mime);
+	if (it == offered_payloads_.end()) {
+		it = offered_payloads_.emplace(mime, gdp::copied_files_payload(mime, offered_files_)).first;
+	}
+	*size = it->second.size();
+	return it->second.data();
+}
+
+bool StreamSession::announce_local_files() {
+	if (!client_.file_clipboard_enabled()) {
+		return false;
+	}
+	bool holds_files = false;
+	std::vector<std::string> copied = local_copied_files(&holds_files);
+	if (!holds_files) {
+		if (local_files_.has_list()) {
+			// The files are gone from it.
+			local_files_.set_list({}, [this](const gdp::session::FileList &list) { client_.send_file_list(list); });
+		}
+		return false;
+	}
+	std::vector<std::string> paths;
+	for (std::string &p : copied) {
+		// Paths into our own mount are the host's files coming back (a
+		// clipboard manager took our offer over), not a local copy -- and
+		// reading them from this thread would wait on ourselves.
+		if (!host_files_.contains(p)) {
+			paths.push_back(std::move(p));
+		}
+	}
+	if (paths.empty()) {
+		return true; // nothing local in it: neither files nor their paths go
+	}
+	// Read off this thread (a big folder, a slow drive), then sent.
+	local_files_.set_list(paths, [this](const gdp::session::FileList &list) {
+		client_.send_file_list(list);
+		SLOG_INFO("files: %d copied file(s) offered to the host",
+			(int)std::count_if(list.files().begin(), list.files().end(),
+				[](const gdp::session::FileListEntry &e) { return e.parent() == 0; }));
+	});
+	return true;
+}
+
+void StreamSession::share_folders() {
+	if (options_.shared_folders.empty() && !options_.share_my_files) {
+		return;
+	}
+	if (!client_.file_share_enabled()) {
+		SLOG_INFO("files: the host doesn't take shared folders");
+		return;
+	}
+	for (const std::string &folder : options_.shared_folders) {
+		std::string name;
+		uint64_t id = local_files_.add_share(folder, options_.share_hidden, &name);
+		if (!id) {
+			SLOG_ERROR("files: can't share %s: not a folder", folder.c_str());
+			continue;
+		}
+		client_.send_file_share(id, name, false);
+		SLOG_INFO("files: sharing %s with the host as \"%s\"", folder.c_str(), name.c_str());
+	}
+	if (options_.share_my_files) {
+		rescan_my_folders();
+	}
+}
+
+void StreamSession::rescan_my_folders() {
+	constexpr uint64_t kRescanUs = 3000000;
+	next_my_scan_us_ = gdp::monotonic_us() + kRescanUs;
+	std::vector<MyFolder> now = my_folders();
+	std::set<std::string> present;
+	for (const MyFolder &folder : now) {
+		present.insert(folder.path);
+		if (my_shares_.count(folder.path)) {
+			continue;
+		}
+		std::string name = folder.name;
+		uint64_t id = local_files_.add_share(folder.path, options_.share_hidden, &name);
+		if (!id) {
+			continue;
+		}
+		my_shares_[folder.path] = id;
+		client_.send_file_share(id, name, false);
+		SLOG_INFO("files: sharing %s with the host as \"%s\"", folder.path.c_str(), name.c_str());
+	}
+	for (auto it = my_shares_.begin(); it != my_shares_.end();) {
+		if (present.count(it->first)) {
+			++it;
+			continue;
+		}
+		local_files_.remove_share(it->second);
+		client_.send_file_share(it->second, "", true);
+		SLOG_INFO("files: %s is gone; no longer shared", it->first.c_str());
+		it = my_shares_.erase(it);
+	}
+}
+
+void StreamSession::request_host_file(uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset,
+	bool listing) {
+	std::unique_ptr<gdp::Stream> stream = client_.open_file_stream();
+	if (!stream) {
+		host_files_.fail(id, EIO);
+		return;
+	}
+	gdp::session::FileOpen open;
+	if (listing) {
+		open.mutable_listing()->set_list_id(target.list_id);
+		open.mutable_listing()->set_index(target.index);
+	} else {
+		open.mutable_request()->set_list_id(target.list_id);
+		open.mutable_request()->set_index(target.index);
+		open.mutable_request()->set_offset(offset);
+	}
+	gdp::session::StreamOpen stream_open;
+	stream_open.set_kind(gdp::kStreamKindFile);
+	stream_open.set_params(open.SerializeAsString());
+	std::vector<uint8_t> frame;
+	gdp::encode_frame(stream_open, &frame);
+	stream->send(frame.data(), frame.size(), true); // the request is all this side sends
+	host_files_.answer(id, std::move(stream));
 }
 
 void StreamSession::handle_drop_file(const char *path) {

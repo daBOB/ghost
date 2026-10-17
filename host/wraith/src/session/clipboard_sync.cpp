@@ -265,6 +265,16 @@ void ClipboardSink::note_local_files(std::vector<std::string> paths) {
 	}
 }
 
+void ClipboardSink::note_peer_files() {
+	cached_.clear();
+	if (!files_.empty()) {
+		files_.clear();
+		if (on_local_files) {
+			on_local_files(files_);
+		}
+	}
+}
+
 void ClipboardSink::note_local_text(std::string utf8) {
 	// Anything else on the clipboard means the copied files are gone.
 	if (!files_.empty()) {

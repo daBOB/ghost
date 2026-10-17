@@ -20,6 +20,14 @@ namespace gdp {
 // the streams it governs (gdp-spec.md §2.2, §6.7).
 inline constexpr const char *kCapabilityFile = "file";
 inline constexpr const char *kStreamKindFile = "file";
+// Files both ways on the clipboard, folders included: the host lists what
+// is in copied folders and answers FileListingRequest, the client sends its
+// own FileList and answers FileFetch (gdp-spec.md §7.12). Only with "file"
+// and "clipboard" in effect too.
+inline constexpr const char *kCapabilityFileClipboard = "file-clipboard";
+// Folders the client shares with the host, read-only (FileShare, FileFetch
+// by path). Only with "file" in effect too.
+inline constexpr const char *kCapabilityFileShare = "file-share";
 
 // How many "file" streams a host lets the client keep open at once
 // (Connection::allow_streams()). A client with more files queues them.
@@ -39,7 +47,18 @@ inline constexpr size_t kMaxFileOpenFrameSize = 4096;
 inline constexpr uint32_t kFileReplyTimeoutMs = 30000;
 
 // The most entries a FileList carries; a host lists the first this many.
+// With file-clipboard this counts what was copied, not what is in its
+// folders, which kFileListBudgetBytes bounds instead.
 inline constexpr size_t kMaxFileListEntries = 1000;
+
+// With file-clipboard, a FileList carries what is in copied folders while
+// it stays within this many bytes encoded, and so does each FileListing
+// frame: well within a control frame (1 MiB).
+inline constexpr size_t kFileListBudgetBytes = 512 * 1024;
+
+// How many entries one list may come to, listings included; a listing that
+// would take it past this is refused.
+inline constexpr size_t kMaxFileListTotal = 100000;
 
 // The clipboard formats that say "these files were copied", best first:
 // GNOME's (whose first line says copy or cut) and the standard URI list.
@@ -50,6 +69,16 @@ std::string select_copied_files_mime(const std::vector<std::string> &offered);
 // above): file:// URIs with no host or "localhost", percent-decoded, in
 // order. Anything else (another scheme, a remote host, a NUL) is skipped.
 std::vector<std::string> copied_file_paths(const std::string &mime, const std::string &data);
+
+// What a side that puts copied files on its local clipboard offers them as,
+// best first: GNOME's format, the URI list, and their paths as text.
+const std::vector<std::string> &copied_files_offer_mime_types();
+// The payload for `mime` (one of those) when the clipboard holds `paths`:
+// always a copy, never a cut -- nothing deletes an original across.
+std::string copied_files_payload(const std::string &mime, const std::vector<std::string> &paths);
+// `path` as a file:// URI, all but unreserved characters and '/'
+// percent-encoded (RFC 8089).
+std::string file_uri(const std::string &path);
 
 // gdp-spec.md §7.12: non-empty, at most kMaxFileNameBytes, valid UTF-8, no
 // '/', '\\' or control character (U+0000-U+001F, U+007F), and not "." or

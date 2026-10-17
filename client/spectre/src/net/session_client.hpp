@@ -26,6 +26,8 @@
 namespace gdp::session {
 class ClipboardData;
 class ControlEnvelope;
+class FileFetch;
+class FileList;
 class HidConnect;
 class InputEnvelope;
 } // namespace gdp::session
@@ -203,6 +205,14 @@ public:
 	// StreamSession wires it to SDL_SetClipboardText. `utf8` is non-empty
 	// and within the size cap -- anything else was dropped here.
 	std::function<void(const std::string &utf8)> on_clipboard_text;
+	// Fires on FileList (gdp-spec.md §7.12): what the host's user copied, the
+	// latest list (no files: the clipboard holds something else now). Only
+	// with "file" and "clipboard" in effect.
+	std::function<void(const gdp::session::FileList &list)> on_file_list;
+	// Fires on FileFetch: the host wants one of this client's files, or a
+	// folder's contents (file-clipboard, file-share). Answered on a stream of
+	// open_file_stream()'s.
+	std::function<void(const gdp::session::FileFetch &fetch)> on_file_fetch;
 	// Fires on DisplaysChanged (gdp-spec.md §7.2): the output's size now,
 	// the answer to send_resolution_change() whether or not the host could
 	// change it.
@@ -264,11 +274,23 @@ public:
 	// to SDL_SetClipboardText, so the SDL_EVENT_CLIPBOARD_UPDATE that call
 	// raises is recognised as our own write rather than a fresh local copy.
 	void note_clipboard_applied(const std::string &utf8) { clipboard_echo_.note_applied(utf8); }
-	// Whether to offer the "file" capability (gdp/file_transfer.hpp); on
-	// unless turned off. Must be called before connect().
+	// Whether to offer the "file" capability (gdp/file_transfer.hpp), and
+	// with it "file-clipboard" (copied files both ways, folders included);
+	// on unless turned off. Must be called before connect().
 	void set_file_transfer(bool enabled) { offer_file_ = enabled; }
-	// True once SessionAccept put "file" in effect.
+	// Whether to offer "file-share": this client has folders to share. Must
+	// be called before connect().
+	void set_file_share(bool enabled) { offer_file_share_ = enabled; }
+	// True once SessionAccept put "file" in effect, and the others.
 	bool file_enabled() const { return file_enabled_; }
+	bool file_clipboard_enabled() const { return file_clipboard_enabled_; }
+	bool file_share_enabled() const { return file_share_enabled_; }
+	// What this client's user copied, for the host (file-clipboard); a list
+	// with no files takes it back. No-op unless file_clipboard_enabled().
+	void send_file_list(const gdp::session::FileList &list);
+	// A folder this client shares, or (`removed`) stops sharing. No-op unless
+	// file_share_enabled().
+	void send_file_share(uint64_t share_id, const std::string &name, bool removed);
 	// A new "file" stream (gdp-spec.md §7.12) for FileTransfers, or null
 	// unless file_enabled().
 	std::unique_ptr<gdp::Stream> open_file_stream();
@@ -388,7 +410,10 @@ private:
 	bool offer_hid_ = false;
 	bool offer_refine_ = true;
 	bool offer_file_ = true;
+	bool offer_file_share_ = false;
 	bool file_enabled_ = false;
+	bool file_clipboard_enabled_ = false;
+	bool file_share_enabled_ = false;
 	uint32_t requested_width_ = 0;
 	uint32_t requested_height_ = 0;
 	gdp::Stream *control_ = nullptr;

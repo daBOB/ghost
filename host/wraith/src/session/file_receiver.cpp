@@ -257,11 +257,6 @@ void FileReceiver::handle_data(Transfer *t, const uint8_t *data, size_t len) {
 		case gdp::FileStreamReader::State::kError: protocol_error(t, t->reader.error_code()); return;
 		case gdp::FileStreamReader::State::kOpened: break;
 		}
-		if (!t->reader.take_data().empty()) {
-			// gdp-spec.md §7.12: not one byte before "accepted".
-			protocol_error(t, static_cast<uint64_t>(gdp::ErrorCode::kMalformedFrame));
-			return;
-		}
 		handle_offer(t);
 		return;
 	}
@@ -313,16 +308,36 @@ void FileReceiver::handle_offer(Transfer *t) {
 		protocol_error(t, static_cast<uint64_t>(gdp::ErrorCode::kMalformedFrame));
 		return;
 	}
+	// Not ours: the stream goes, the transfer that read it doesn't.
 	if (open.has_request() && on_request) {
-		// Not ours: the stream goes, the transfer that read it doesn't.
 		std::unique_ptr<gdp::Stream> stream = std::move(t->stream);
 		transfers_.erase(t->id);
 		auto handler = on_request;
 		handler(std::move(stream), open.request());
 		return;
 	}
+	if (open.has_listing() && on_listing) {
+		std::unique_ptr<gdp::Stream> stream = std::move(t->stream);
+		transfers_.erase(t->id);
+		auto handler = on_listing;
+		handler(std::move(stream), open.listing());
+		return;
+	}
+	if (open.has_answer() && on_answer) {
+		std::vector<uint8_t> data = t->reader.take_data();
+		std::unique_ptr<gdp::Stream> stream = std::move(t->stream);
+		transfers_.erase(t->id);
+		auto handler = on_answer;
+		handler(std::move(stream), open.answer(), std::move(data));
+		return;
+	}
 	if (!open.has_offer()) {
 		refuse(t, gdp::session::FILE_ERROR_UNSUPPORTED);
+		return;
+	}
+	if (!t->reader.take_data().empty()) {
+		// gdp-spec.md §7.12: not one byte before "accepted".
+		protocol_error(t, static_cast<uint64_t>(gdp::ErrorCode::kMalformedFrame));
 		return;
 	}
 	t->name = open.offer().name();

@@ -4,6 +4,7 @@
 #include "screencast/gnome_clipboard.hpp"
 
 #include "gdp/clipboard.hpp"
+#include "gdp/file_transfer.hpp"
 #include "screencast/sdbus_util.hpp"
 
 #include <systemd/sd-bus.h>
@@ -27,16 +28,16 @@ namespace {
 constexpr const char *kRdService = "org.gnome.Mutter.RemoteDesktop";
 constexpr const char *kRdSessionIface = "org.gnome.Mutter.RemoteDesktop.Session";
 
-// Appends an a{sv} with a single 'mime-types' entry holding the whole
-// text offer set -- the argument EnableClipboard and SetSelection both
-// take to say "we own the selection, and this is what we can serve".
-int append_mime_types_options(sd_bus_message *m) {
+// Appends an a{sv} with a single 'mime-types' entry holding `mimes` -- the
+// argument EnableClipboard and SetSelection both take to say "we own the
+// selection, and this is what we can serve".
+int append_mime_types_options(sd_bus_message *m, const std::vector<std::string> &mimes) {
 	int r = sd_bus_message_open_container(m, 'a', "{sv}");
 	r = r >= 0 ? sd_bus_message_open_container(m, 'e', "sv") : r;
 	r = r >= 0 ? sd_bus_message_append(m, "s", "mime-types") : r;
 	r = r >= 0 ? sd_bus_message_open_container(m, 'v', "as") : r;
 	r = r >= 0 ? sd_bus_message_open_container(m, 'a', "s") : r;
-	for (const std::string &mime : gdp::clipboard_offer_mime_types()) {
+	for (const std::string &mime : mimes) {
 		r = r >= 0 ? sd_bus_message_append(m, "s", mime.c_str()) : r;
 	}
 	r = r >= 0 ? sd_bus_message_close_container(m) : r; // a s
@@ -146,8 +147,9 @@ struct GnomeClipboard::Impl {
 	sd_bus_slot *transfer_slot = nullptr;
 	bool clipboard_enabled = false;
 	// What SetSelection last offered, i.e. what a SelectionTransfer is
-	// answered with.
+	// answered with: text, or (own_files not empty) copied files.
 	std::string own_text;
+	std::vector<std::string> own_files;
 
 	// Someone else took the selection: read the best text mime they offer.
 	static int on_owner_changed(sd_bus_message *m, void *data, sd_bus_error *) {
@@ -262,7 +264,10 @@ struct GnomeClipboard::Impl {
 		// Written off the event loop, never inline: mutter cancels a
 		// transfer it waits too long for, and a paste target that stops
 		// reading must not take the session's event loop down with it.
-		owner->write_pipe(dup_fd, clipboard_payload_for_mime(own_text, mime.c_str()), serial);
+		owner->write_pipe(dup_fd,
+			own_files.empty() ? clipboard_payload_for_mime(own_text, mime.c_str())
+							  : gdp::copied_files_payload(mime, own_files),
+			serial);
 	}
 
 	void write_done(uint32_t serial, bool ok) {
@@ -363,6 +368,7 @@ void GnomeClipboard::close() {
 		i.transfer_slot = nullptr;
 	}
 	i.own_text.clear();
+	i.own_files.clear();
 }
 
 void GnomeClipboard::read_pipe(int fd, const std::string &mime) {
@@ -377,40 +383,62 @@ void GnomeClipboard::write_pipe(int fd, std::string payload, uint32_t serial) {
 	pipes_.write(fd, std::move(payload), [this, serial](bool ok) { impl_->write_done(serial, ok); });
 }
 
-void GnomeClipboard::set_text(const std::string &utf8) {
+bool GnomeClipboard::take_selection(const std::vector<std::string> &mimes) {
 	Impl &i = *impl_;
-	if (!i.clipboard_enabled) {
-		return;
-	}
-	i.own_text = utf8;
-
 	sd_bus_message *m = nullptr;
 	int r = sd_bus_message_new_method_call(i.bus, &m, kRdService, i.session_path.c_str(), kRdSessionIface,
 		"SetSelection");
 	if (r >= 0) {
 		// The whole offer set: mutter serves each of these to a pasting
 		// app (and to Xwayland) by asking us for it via SelectionTransfer.
-		r = append_mime_types_options(m);
+		r = append_mime_types_options(m, mimes);
 	}
 	sd_bus_error error = SD_BUS_ERROR_NULL;
 	if (r >= 0) {
 		r = sd_bus_call(i.bus, m, 0, &error, nullptr);
 	}
 	sd_bus_message_unref(m);
-	// Mutter asks for the text (SelectionTransfer) as soon as an app
+	// Mutter asks for the selection (SelectionTransfer) as soon as an app
 	// pastes, possibly while this call waited for its reply.
 	i.process_queued();
 	if (r < 0) {
 		WLOG_ERROR("clipboard: SetSelection failed: %s", sdbus_error_text(error, r));
 		sd_bus_error_free(&error);
-		return;
+		return false;
 	}
 	sd_bus_error_free(&error);
+	return true;
+}
+
+void GnomeClipboard::set_text(const std::string &utf8) {
+	Impl &i = *impl_;
+	if (!i.clipboard_enabled) {
+		return;
+	}
+	i.own_text = utf8;
+	i.own_files.clear();
+	if (!take_selection(gdp::clipboard_offer_mime_types())) {
+		return;
+	}
 	// Record it as the last thing seen too, so a later session's initial
 	// push doesn't hand a peer back text that peer just sent. The
 	// SelectionOwnerChanged this provokes carries session-is-owner and is
 	// swallowed there.
 	note_local_text(utf8);
+}
+
+void GnomeClipboard::set_files(const std::vector<std::string> &paths) {
+	Impl &i = *impl_;
+	if (!i.clipboard_enabled || paths.empty()) {
+		return;
+	}
+	i.own_text.clear();
+	i.own_files = paths;
+	// Its SelectionOwnerChanged carries session-is-owner too: never read
+	// back as a local copy of files.
+	if (take_selection(gdp::copied_files_offer_mime_types())) {
+		note_peer_files();
+	}
 }
 
 } // namespace wraith
