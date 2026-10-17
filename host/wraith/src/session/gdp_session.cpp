@@ -839,7 +839,9 @@ void GdpSession::start_file_receiver() {
 	};
 	active_->conn->allow_streams(gdp::kFileStreamsAtOnce);
 	WLOG_INFO("gdp: files from the client go to %s", file_directory_.c_str());
-	if (config().files.send) {
+	// The files the user copies are clipboard content (gdp-spec.md §7.12):
+	// listed only to a client that syncs the clipboard too.
+	if (config().files.send && gdp::has_capability(capabilities_, gdp::kCapabilityClipboard)) {
 		file_sender_ = std::make_unique<FileSender>(
 			host_.event_loop(), [this] { return active_ ? active_->conn->rtt_us() : 0u; },
 			[this] { return send_queue_clear(); });

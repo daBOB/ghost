@@ -1396,8 +1396,8 @@ for the answer indefinitely.
 ### 7.12 File transfer
 
 With the `file` capability in effect, the client sends files to the host,
-and fetches the files the host's user copied, one additional stream
-(§2.2) of kind `file` per file. The client opens every `file` stream; the
+and, with `clipboard` in effect too, fetches the files the host's user
+copied, one additional stream (§2.2) of kind `file` per file. The client opens every `file` stream; the
 host never does. A host offers the capability only if it has somewhere to
 put received files (§17, "File transfer"), and on accepting it grants the
 client 4 `file` streams at once (§2.2); a client with more files to send
@@ -1476,9 +1476,11 @@ A file's integrity rests on QUIC's: there is no checksum. Folders are not
 transferred in this version; a client offers the files in one, if it
 offers anything.
 
-**Copied files.** When the host's clipboard comes to hold files its user
-copied (a file manager's copy), the host sends `FileList` (host → client,
-on the control stream):
+**Copied files.** On a session where both `file` and `clipboard` are in
+effect, when the host's clipboard comes to hold files its user copied (a
+file manager's copy), the host sends `FileList` (host → client, on the
+control stream). With `file` alone, nothing about the host's clipboard is
+sent:
 
 | # | Field | Type | Meaning |
 |---|---|---|---|
@@ -1488,31 +1490,57 @@ on the control stream):
 A `FileListEntry` is `name` (1, string, the rules above), `size` (2,
 uint64, when the list was made), `modified_unix_ms` (3, int64, 0 if
 unknown) and `directory` (4, bool: a folder, which can't be fetched in
-this version). When the clipboard stops holding files, the host sends a
+this version; what is inside one is left to a later capability, so that
+a client that doesn't know it never sees entries it can't place). When the clipboard stops holding files, the host sends a
 `FileList` with a new `list_id` and no files; right after `SessionAccept`
 it sends the current one if its clipboard holds files. While the
 clipboard holds files the host does not also send their paths as
 `ClipboardData` (§7.9): a client that pastes them as text would make
-something that isn't the file. Only the latest list can be fetched from.
+something that isn't the file. So a client that offers `file` and
+`clipboard` takes on `FileList`: copied files reach it no other way, and
+one that does nothing with the list gets nothing of a copy of files.
+
+A host MUST answer requests from its latest list, and MAY go on
+answering requests from earlier ones for a while, so that a paste still
+under way survives the user copying something else; it answers `GONE`
+for a list it no longer keeps. A client relies on neither: an earlier
+list may be gone, or still there.
 
 To fetch file `index` of list `list_id`, the client opens a `file`
-stream whose `FileOpen` is a `FileRequest` (`list_id` 1, uint64;
-`index` 2, uint32), and finishes its direction with FIN: it sends
-nothing else. The host answers with one `FileReply`:
+stream whose `FileOpen` is a `FileRequest` and finishes its direction
+with FIN: it sends nothing else.
 
-- `refused` with `FILE_ERROR_GONE` if the list isn't the latest, the
-  index is past its end or names a folder, or the file can't be found,
-  with `FILE_ERROR_READ_FAILED` if it can't be opened, then FIN;
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `list_id` | uint64 | The `FileList` the file is in. |
+| 2 | `index` | uint32 | Its place in that list's `files`. |
+| 3 | `offset` | uint64 | The first byte wanted; 0 for the whole file. |
+| 4 | `length` | uint64 | How many bytes from `offset`; 0 to the end of the file. |
+
+The host answers with one `FileReply`:
+
+- `refused` with `FILE_ERROR_GONE` if the host no longer keeps the list,
+  the index is past its end or names a folder, or the file can't be
+  found, with `FILE_ERROR_READ_FAILED` if it can't be opened, then FIN;
 - or `sending` (5, `FileSending`: `name` 1, string; `size` 2, uint64;
-  `modified_unix_ms` 3, int64), then exactly `size` raw bytes, then FIN.
-  The size is the file's when the host opened it, not the list's.
+  `modified_unix_ms` 3, int64; `offset` 4, uint64; `file_size` 5,
+  uint64), then exactly `size` raw bytes, then FIN. `file_size` is the
+  file's length when the host opened it, not the list's; the bytes sent
+  are those from `offset` up to `offset + length`, cut short at the end
+  of the file, and `size` is how many that is (0 when `offset` is at or
+  past the end, which is not an error). `offset` says where they start.
+
+A host that predates ranges ignores `offset` and `length` and sends the
+whole file with `offset` 0: a client that asked for a later offset MUST
+check `FileSending.offset` and skip what it didn't ask for, or stop
+asking for ranges.
 
 A host that can't go on part way (a read error) resets the stream with
 code 0. The client checks `name` against the rules above before using it
 for anything, never takes it as a path, and treats a stream that ends
 before `size` bytes as a failure. Either side cancels by resetting the
 stream (code 0), as for an offer. The host MUST send only the files of
-its latest list, by index: a request never names a path. A client
+a list it sent and still keeps, by index: a request never names a path. A client
 that has had no `FileReply` 30 s after its request resets the stream.
 
 File data from the host shares the downlink with the video. A host
@@ -1528,7 +1556,8 @@ so on. It checks for `size` bytes of free space before accepting, and
 shows one desktop notification when a batch of transfers has finished.
 It reads copied files from the clipboard's `x-special/gnome-copied-files`
 or `text/uri-list` (local `file://` URIs only), and sends them from a
-thread of its own.
+thread of its own. It keeps the latest list and up to 4 earlier ones,
+each for 10 minutes after the next one replaced it.
 
 ---
 
@@ -2502,8 +2531,11 @@ goes (no paths, no `..`, no following a symbolic link at the target),
 MUST NOT overwrite or execute anything, and SHOULD keep received files
 in one directory the user knows to look in. A client sends only files
 its user chose to send, never on its own. The other way, the client can
-fetch only what the host's user copied, by its index in the latest
-`FileList`, never a path; and names from the host are held to the same
+fetch only what the host's user copied, by its index in a `FileList`
+the host still keeps, never a path, and only on a session that also
+syncs the clipboard, which already shows the client what the user
+copies; a host that keeps earlier lists lets the client fetch, for that
+long, files the user has since copied something else over; and names from the host are held to the same
 rules before the client stores anything under them. `FileSaved.directory`
 shows the client a path on the host, which usually names the user's
 account; it goes only to the attached client, which sees the desktop
@@ -2555,6 +2587,7 @@ either side to the other; a client SHOULD let its user turn it off.
 | File name, maximum; opening frame, maximum | 255 bytes; 4096 bytes | §7.12 |
 | File offer or request, reply deadline | 30 s | §7.12 |
 | `FileList` entries, maximum | 1000 | §7.12 |
+| Earlier `FileList`s kept (reference host) | 4, for 10 min each | §7.12 |
 | `DiagnosticsReport` text, maximum | 512 KiB | §7.11 |
 | Gamepad slots; axes; buttons | 4; 6; 26 | §8.5 |
 | HID report descriptor; report | 4096 bytes; 4096 bytes | §8.6 |

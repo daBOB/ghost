@@ -211,6 +211,8 @@ message FileListEntry {
 message FileRequest {
   uint64 list_id = 1;   // the FileList it comes from
   uint32 index = 2;     // into its files
+  uint64 offset = 3;    // the first byte wanted; past the end: none
+  uint64 length = 4;    // how many from there; 0 = to the end of the file
 }
 
 message FileOffer {
@@ -234,6 +236,8 @@ message FileSending {
   string name = 1;
   uint64 size = 2;              // exactly this many raw bytes follow
   int64 modified_unix_ms = 3;
+  uint64 offset = 4;            // where in the file they start (0 from a host that ignores ranges)
+  uint64 file_size = 5;         // the whole file's length when the host opened it
 }
 
 message FileAccepted {}

@@ -103,11 +103,17 @@ destroyed with it.
   afterwards takes the list back with an empty one.
 - **The list.** `FileSender::set_list()` stats each path: folders are
   listed but flagged, anything else that isn't a regular file (devices,
-  pipes) or has an unusable name is left out, at most 1000 entries. A new
-  list makes the old one unfetchable; a fetch already going keeps going.
-- **Sending.** A request is answered from the latest list by index:
+  pipes) or has an unusable name is left out, at most 1000 entries. The
+  latest list and up to 4 earlier ones stay fetchable, each for 10
+  minutes after it was replaced, so a paste still reading (a FUSE mount
+  on the client, one day) survives a new copy; a fetch already going
+  keeps going regardless. Only on a session with `clipboard` as well as
+  `file`: the list is clipboard content.
+- **Sending.** A request is answered from a list still kept, by index:
   the file is opened then, and `FileSending` carries its size at that
-  moment. A thread of its own reads 256 KiB at a time (`pread`), so a
+  moment. A request may name a range (`offset`, `length`), which is
+  what a client reading a file piece by piece needs; the reply says
+  where its bytes start and how long the whole file is. A thread of its own reads 256 KiB at a time (`pread`), so a
   cold disk doesn't stall the encoder. A file that comes up short while
   being read is reset rather than sent short.
 - **Pacing.** File data competes with the video for the downlink.

@@ -4,9 +4,10 @@
 // Copied files going to the client (session/file_sender.hpp, gdp-spec.md
 // §7.12): a real libgdp client fetches files over loopback from a
 // FileSender behind a FileReceiver, on a wl_event_loop as wraith runs
-// them. Covers the list (what it leaves out), a file arriving whole,
-// refusals, a file that shrinks while it goes, the client cancelling, and
-// file data waiting while the video has a backlog. Also how the clipboard
+// them. Covers the list (what it leaves out), a file arriving whole, a
+// range of one, refusals, earlier lists kept for a while, a file that
+// shrinks while it goes, the client cancelling, and file data waiting
+// while the video has a backlog. Also how the clipboard
 // sink tells copied files from text (session/clipboard_sync.hpp).
 #include "session/clipboard_sync.hpp"
 #include "session/file_receiver.hpp"
@@ -102,7 +103,8 @@ struct Fetch {
 	bool reset = false;
 };
 
-std::unique_ptr<Fetch> fetch(gdp::Connection &conn, uint64_t list_id, uint32_t index) {
+std::unique_ptr<Fetch> fetch(gdp::Connection &conn, uint64_t list_id, uint32_t index, uint64_t offset = 0,
+	uint64_t length = 0) {
 	auto f = std::make_unique<Fetch>();
 	Fetch *p = f.get();
 	p->stream = conn.open_stream();
@@ -119,6 +121,8 @@ std::unique_ptr<Fetch> fetch(gdp::Connection &conn, uint64_t list_id, uint32_t i
 	gdp::session::FileOpen open;
 	open.mutable_request()->set_list_id(list_id);
 	open.mutable_request()->set_index(index);
+	open.mutable_request()->set_offset(offset);
+	open.mutable_request()->set_length(length);
 	gdp::session::StreamOpen stream_open;
 	stream_open.set_kind(gdp::kStreamKindFile);
 	stream_open.set_params(open.SerializeAsString());
@@ -193,8 +197,9 @@ int main() {
 	std::filesystem::create_directory(dir + "/folder");
 
 	bool video_clear = true;
-	auto sender =
-		std::make_unique<wraith::FileSender>(loop.loop, [] { return 300u; }, [&] { return video_clear; });
+	uint64_t now_us = 1'000'000; // the clock lists age by
+	auto sender = std::make_unique<wraith::FileSender>(
+		loop.loop, [] { return 300u; }, [&] { return video_clear; }, [&] { return now_us; });
 	std::vector<uint64_t> protocol_errors;
 	wraith::FileReceiver receiver(
 		loop.loop, dir, [&](uint64_t code) { protocol_errors.push_back(code); },
@@ -236,24 +241,45 @@ int main() {
 	CHECK(loop.until(5000, [&] { return a->fin; }));
 	CHECK(a->replied && a->reply.has_sending() && a->reply.sending().name() == "small.txt");
 	CHECK(a->reply.sending().size() == small.size() && a->data == small);
+	CHECK(a->reply.sending().offset() == 0 && a->reply.sending().file_size() == small.size());
 	auto b = fetch(*client, 1, 1);
 	CHECK(loop.until(10000, [&] { return b->fin; }));
 	CHECK(b->data == big && !b->reset);
+
+	// Ranges: from the middle; to the end; cut short at the end; at and
+	// past the end (no bytes, not an error).
+	auto mid = fetch(*client, 1, 1, 1000, 5000);
+	auto tail = fetch(*client, 1, 1, big.size() - 100);
+	auto cut = fetch(*client, 1, 1, big.size() - 100, 1000);
+	auto at_end = fetch(*client, 1, 1, big.size());
+	CHECK(loop.until(5000, [&] { return mid->fin && tail->fin && cut->fin && at_end->fin; }));
+	CHECK(mid->reply.has_sending() && mid->reply.sending().offset() == 1000 &&
+		mid->reply.sending().size() == 5000 && mid->reply.sending().file_size() == big.size());
+	CHECK(mid->data == big.substr(1000, 5000));
+	CHECK(tail->reply.sending().size() == 100 && tail->data == big.substr(big.size() - 100));
+	CHECK(cut->reply.sending().size() == 100 && cut->data == big.substr(big.size() - 100));
+	CHECK(at_end->reply.has_sending() && at_end->reply.sending().size() == 0 && at_end->data.empty());
+	CHECK(at_end->reply.sending().offset() == big.size());
+	auto past_end = fetch(*client, 1, 1, big.size() + 7, 10);
+	CHECK(loop.until(5000, [&] { return past_end->fin; }));
+	CHECK(past_end->reply.sending().size() == 0 && past_end->reply.sending().offset() == big.size());
 	auto e = fetch(*client, 1, 4);
 	CHECK(loop.until(5000, [&] { return e->fin; }));
 	CHECK(e->reply.has_sending() && e->reply.sending().size() == 0 && e->data.empty());
 
-	// Refused: a folder, an index past the end, a list that isn't the latest.
+	// Refused: a folder, an index past the end.
 	auto folder = fetch(*client, 1, 2);
 	auto past = fetch(*client, 1, 9);
 	CHECK(loop.until(5000, [&] { return folder->fin && past->fin; }));
 	CHECK(folder->reply.has_refused() && folder->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
 	CHECK(past->reply.has_refused() && past->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
+	// A list replaced by a newer one is still answered for a while: a
+	// paste still reading survives a new copy.
 	auto list2 = sender->set_list({dir + "/small.txt"});
 	CHECK(list2.list_id() == 2);
-	auto stale = fetch(*client, 1, 0);
-	CHECK(loop.until(5000, [&] { return stale->fin; }));
-	CHECK(stale->reply.has_refused() && stale->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
+	auto earlier = fetch(*client, 1, 0);
+	CHECK(loop.until(5000, [&] { return earlier->fin; }));
+	CHECK(earlier->reply.has_sending() && earlier->data == small);
 	// A file deleted after it was listed.
 	write_file(dir + "/doomed.txt", "x");
 	sender->set_list({dir + "/doomed.txt"});
@@ -288,6 +314,26 @@ int main() {
 	CHECK(loop.until(5000, [&] { return shrinks->reset || shrinks->fin; }));
 	CHECK(shrinks->reset && !shrinks->fin);
 	CHECK(loop.until(5000, [&] { return sender->active_transfers() == 0; }));
+
+	// Earlier lists are kept up to kKeptLists of them: lists 1 to 5 so far,
+	// and a sixth pushes the oldest out.
+	CHECK(sender->set_list({dir + "/small.txt"}).list_id() == 6);
+	auto dropped = fetch(*client, 1, 0);
+	auto kept = fetch(*client, 2, 0);
+	CHECK(loop.until(5000, [&] { return dropped->fin && kept->fin; }));
+	CHECK(dropped->reply.has_refused() && dropped->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
+	CHECK(kept->reply.has_sending() && kept->data == small);
+	// ... and for kKeptListUs after each was replaced.
+	now_us += wraith::FileSender::kKeptListUs - 1;
+	auto just_in_time = fetch(*client, 2, 0);
+	CHECK(loop.until(5000, [&] { return just_in_time->fin; }));
+	CHECK(just_in_time->reply.has_sending());
+	now_us += 1;
+	auto too_late = fetch(*client, 2, 0);
+	auto latest = fetch(*client, 6, 0);
+	CHECK(loop.until(5000, [&] { return too_late->fin && latest->fin; }));
+	CHECK(too_late->reply.has_refused() && too_late->reply.refused().code() == gdp::session::FILE_ERROR_GONE);
+	CHECK(latest->reply.has_sending() && latest->data == small); // the latest never ages
 
 	// The window grew on a quiet link.
 	CHECK(sender->window().bytes() > wraith::FileWindow::kInitial);

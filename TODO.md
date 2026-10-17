@@ -63,6 +63,8 @@ Limitations section.
   Video on NVIDIA; on Windows D3D11VA's P010 input, R10G10B10A2 output
   and the software path's BT.709 coefficients; VideoToolbox's P010 copy
   on a Mac.
-- spectre has no file transfer (gdp-spec.md §7.12): offer `file`, send
-  dropped files and fetch the host's copied ones
+- spectre sends dropped files (gdp-spec.md §7.12) but does nothing with
+  the host's `FileList`, so files copied on the host reach it neither as
+  files nor, as before `file`, as paths in text: paste through a FUSE
+  folder fetching ranges is the plan
   ([file transfer](docs/design/file-transfer.md)).

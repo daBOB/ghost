@@ -47,6 +47,12 @@ changing, the host re-sends it pixel-exact, so text stays sharp. It
 costs the host a little time every frame, so turn it off in the menu for
 games where that matters. spectre remembers the choice.
 
+Drop files on the window to send them to the host: they land in the
+host user's Downloads folder (or wherever its `[files] directory`
+points), never over a file already there, and a notice says where they
+went. Folders aren't sent, and the host has to allow it (`[files]
+receive`, on by default; [configuration](../reference/configuration.md)).
+
 ## Trust
 
 spectre-qt remembers each login server's certificate on first use in

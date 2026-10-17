@@ -59,8 +59,9 @@ FileSender::OpenFile::~OpenFile() {
 }
 
 FileSender::FileSender(struct wl_event_loop *loop, std::function<uint32_t()> rtt_us,
-	std::function<bool()> video_queue_clear)
-	: loop_(loop), rtt_us_(std::move(rtt_us)), video_queue_clear_(std::move(video_queue_clear)) {
+	std::function<bool()> video_queue_clear, std::function<uint64_t()> now_us)
+	: loop_(loop), rtt_us_(std::move(rtt_us)), video_queue_clear_(std::move(video_queue_clear)),
+	  now_us_(now_us ? std::move(now_us) : std::function<uint64_t()>(gdp::monotonic_us)) {
 	done_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 	done_source_.reset(wl_event_loop_add_fd(
 		loop_, done_fd_, WL_EVENT_READABLE,
@@ -90,12 +91,16 @@ FileSender::~FileSender() {
 }
 
 gdp::session::FileList FileSender::set_list(const std::vector<std::string> &paths) {
+	uint64_t now = now_us_();
+	auto latest = lists_.find(list_id_);
+	if (latest != lists_.end()) {
+		latest->second.replaced_us = now;
+	}
 	list_id_++;
-	paths_.clear();
-	list_.Clear();
-	list_.set_list_id(list_id_);
+	List &list = lists_[list_id_];
+	list.listing.set_list_id(list_id_);
 	for (const std::string &path : paths) {
-		if (paths_.size() == gdp::kMaxFileListEntries) {
+		if (list.paths.size() == gdp::kMaxFileListEntries) {
 			break;
 		}
 		struct stat st;
@@ -107,26 +112,48 @@ gdp::session::FileList FileSender::set_list(const std::vector<std::string> &path
 		if (!directory && !S_ISREG(st.st_mode)) {
 			continue; // a device, a pipe: nothing to send
 		}
-		auto *entry = list_.add_files();
+		auto *entry = list.listing.add_files();
 		entry->set_name(name);
 		entry->set_size(directory ? 0 : (uint64_t)st.st_size);
 		entry->set_modified_unix_ms(mtime_ms(st));
 		entry->set_directory(directory);
-		paths_.push_back(path);
+		list.paths.push_back(path);
 	}
-	if (!paths_.empty()) {
-		WLOG_INFO("file: the clipboard holds %zu copied file(s) for the client", paths_.size());
+	if (!list.paths.empty()) {
+		WLOG_INFO("file: the clipboard holds %zu copied file(s) for the client", list.paths.size());
 	}
-	return list_;
+	expire_lists(now);
+	return list.listing;
+}
+
+void FileSender::expire_lists(uint64_t now_us) {
+	size_t earlier = 0;
+	std::vector<uint64_t> gone;
+	// Newest first, so whatever is past the count is the oldest.
+	for (auto it = lists_.rbegin(); it != lists_.rend(); ++it) {
+		const List &list = it->second;
+		if (list.replaced_us == 0) {
+			continue; // the latest
+		}
+		if (++earlier > kKeptLists || now_us - list.replaced_us >= kKeptListUs) {
+			gone.push_back(it->first);
+		}
+	}
+	for (uint64_t id : gone) {
+		lists_.erase(id);
+	}
 }
 
 void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::FileRequest &request) {
 	uint32_t index = request.index();
-	if (request.list_id() != list_id_ || index >= paths_.size() || list_.files((int)index).directory()) {
+	expire_lists(now_us_());
+	auto kept = lists_.find(request.list_id());
+	if (kept == lists_.end() || index >= kept->second.paths.size() ||
+		kept->second.listing.files((int)index).directory()) {
 		refuse(std::move(stream), gdp::session::FILE_ERROR_GONE);
 		return;
 	}
-	const std::string &path = paths_[index];
+	const std::string &path = kept->second.paths[index];
 	auto file = std::make_shared<OpenFile>();
 	file->fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
 	struct stat st;
@@ -143,14 +170,21 @@ void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::
 	t->id = next_transfer_++;
 	t->stream = std::move(stream);
 	t->file = std::move(file);
-	t->name = list_.files((int)index).name();
-	t->size = (uint64_t)st.st_size;
+	t->name = kept->second.listing.files((int)index).name();
+	// gdp-spec.md §7.12: from `offset`, `length` bytes (0: to the end), cut
+	// short at the end of the file; an offset past it is no bytes at all.
+	uint64_t file_size = (uint64_t)st.st_size;
+	t->start = std::min<uint64_t>(request.offset(), file_size);
+	uint64_t left = file_size - t->start;
+	t->size = request.length() == 0 ? left : std::min<uint64_t>(request.length(), left);
 
 	gdp::session::FileReply reply;
 	auto *sending = reply.mutable_sending();
 	sending->set_name(t->name);
 	sending->set_size(t->size);
 	sending->set_modified_unix_ms(mtime_ms(st));
+	sending->set_offset(t->start);
+	sending->set_file_size(file_size);
 	std::vector<uint8_t> frame;
 	gdp::encode_frame(reply, &frame);
 	t->header = frame.size();
@@ -165,7 +199,12 @@ void FileSender::serve(std::unique_ptr<gdp::Stream> stream, const gdp::session::
 		remove(t);
 	};
 	t->stream->on_acked = [this, t](uint64_t total) { acknowledged(t, total); };
-	WLOG_INFO("file: sending \"%s\" (%llu bytes)", t->name.c_str(), (unsigned long long)t->size);
+	if (t->start == 0 && t->size == file_size) {
+		WLOG_INFO("file: sending \"%s\" (%llu bytes)", t->name.c_str(), (unsigned long long)t->size);
+	} else {
+		WLOG_INFO("file: sending \"%s\" bytes %llu-%llu of %llu", t->name.c_str(), (unsigned long long)t->start,
+			(unsigned long long)(t->start + t->size), (unsigned long long)file_size);
+	}
 	if (t->size == 0) {
 		return; // its FIN went with the reply; the stream goes gracefully
 	}
@@ -230,7 +269,7 @@ void FileSender::pump() {
 			break;
 		}
 		size_t len = (size_t)std::min<uint64_t>({kReadChunk, t->size - t->asked, window_.bytes() - flying});
-		ReadJob job{t->id, t->file, t->asked, len};
+		ReadJob job{t->id, t->file, t->start + t->asked, len};
 		t->asked += len;
 		t->reading = true;
 		{

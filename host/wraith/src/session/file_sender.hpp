@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The host's end of copied files going to the client (gdp-spec.md §7.12):
-// the FileList of what the user copied, and each file the viewer asks for
-// by its index in it.
+// the FileList of what the user copied, and each file (or range of one)
+// the viewer asks for by its index in a list still kept: the latest, and
+// up to kKeptLists earlier ones for kKeptListUs after each was replaced,
+// so a paste still reading survives a new copy.
 //
 // Files are read by a thread of its own, like FileReceiver's writes, so a
 // slow disk never stalls the event loop that encodes the desktop. File
@@ -56,17 +58,25 @@ private:
 
 class FileSender {
 public:
+	// Earlier lists still answered, and for how long after each was
+	// replaced.
+	static constexpr size_t kKeptLists = 4;
+	static constexpr uint64_t kKeptListUs = 10ull * 60 * 1000000;
+
 	// `rtt_us`: the connection's RTT now. `video_queue_clear`: false while
 	// the video's send queue has a backlog (GdpSession::send_queue_clear()).
+	// `now_us`: the clock lists age by (gdp::monotonic_us() unless a test
+	// says otherwise).
 	FileSender(struct wl_event_loop *loop, std::function<uint32_t()> rtt_us,
-		std::function<bool()> video_queue_clear);
+		std::function<bool()> video_queue_clear, std::function<uint64_t()> now_us = {});
 	~FileSender();
 
 	FileSender(const FileSender &) = delete;
 	FileSender &operator=(const FileSender &) = delete;
 
 	// The clipboard now holds `paths` (none: it no longer holds files).
-	// Returns the FileList to send; requests for older lists are refused.
+	// Returns the FileList to send. The list it replaces is kept a while
+	// (kKeptLists, kKeptListUs).
 	gdp::session::FileList set_list(const std::vector<std::string> &paths);
 
 	// A "file" stream whose FileOpen is `request` (FileReceiver hands
@@ -87,7 +97,8 @@ private:
 		std::unique_ptr<gdp::Stream> stream;
 		std::shared_ptr<OpenFile> file;
 		std::string name;
-		uint64_t size = 0;
+		uint64_t start = 0;   // the file offset the range begins at
+		uint64_t size = 0;    // bytes of the file to send, from `start`
 		uint64_t header = 0;  // bytes of the FileReply frame ahead of the file
 		uint64_t asked = 0;   // offset the reader has been asked up to
 		uint64_t sent = 0;    // file bytes handed to the stream
@@ -116,15 +127,23 @@ private:
 	void remove(Transfer *t);
 	uint64_t in_flight() const;
 	void reader_main();
+	// Forgets the earlier lists past kKeptLists or kKeptListUs.
+	void expire_lists(uint64_t now_us);
 
 	struct wl_event_loop *loop_;
 	std::function<uint32_t()> rtt_us_;
 	std::function<bool()> video_queue_clear_;
 
-	// The latest list: its id, and each entry's path and listing.
-	uint64_t list_id_ = 0;
-	std::vector<std::string> paths_;
-	gdp::session::FileList list_;
+	// A list the client may still fetch from: each entry's path and
+	// listing.
+	struct List {
+		std::vector<std::string> paths;
+		gdp::session::FileList listing;
+		uint64_t replaced_us = 0; // 0 while it is the latest
+	};
+	std::function<uint64_t()> now_us_;
+	uint64_t list_id_ = 0; // the latest
+	std::map<uint64_t, List> lists_;
 
 	std::map<uint64_t, std::unique_ptr<Transfer>> transfers_;
 	uint64_t next_transfer_ = 1;
