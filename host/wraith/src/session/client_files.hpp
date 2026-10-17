@@ -31,9 +31,11 @@ namespace wraith {
 class ClientFiles {
 public:
 	// `send_fetch` puts a FileFetch on the control stream. `bookmarks`:
-	// give shared folders sidebar entries (file_bookmarks.hpp).
+	// give shared folders sidebar entries (file_bookmarks.hpp), labelled
+	// "<folder> (<client_name>)", or "<folder> (shared by the client)" when
+	// the client gave no name.
 	ClientFiles(struct wl_event_loop *loop, std::function<void(const gdp::session::FileFetch &)> send_fetch,
-		bool bookmarks);
+		bool bookmarks, std::string client_name = "");
 	~ClientFiles();
 	ClientFiles(const ClientFiles &) = delete;
 	ClientFiles &operator=(const ClientFiles &) = delete;
@@ -43,6 +45,10 @@ public:
 	// Whether the client's files can be mounted here at all (FUSE usable,
 	// a runtime directory): what file-clipboard and file-share need.
 	static bool can_mount();
+	// SessionHello.client_name (gdp-spec.md §6.2), which ends up in the
+	// user's bookmarks: as given if it is a usable name (§7.12's rules, at
+	// most 64 bytes), else empty.
+	static std::string usable_client_name(const std::string &name);
 	// Removes sidebar entries a wraith that died left behind. Called once at
 	// startup.
 	static void clean_up_after_crash();
@@ -67,6 +73,7 @@ private:
 	struct wl_event_loop *loop_;
 	std::function<void(const gdp::session::FileFetch &)> send_fetch_;
 	bool bookmarks_;
+	std::string client_name_;
 	bool failed_ = false;
 	gdp::RemoteFiles files_;
 	EventSource fd_source_;

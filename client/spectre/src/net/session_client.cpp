@@ -15,6 +15,15 @@
 #include "session.pb.h"
 #include "log.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <bitset>
@@ -38,6 +47,28 @@ const std::vector<std::string> kDecoders = {"vulkan", "videotoolbox", "software"
 #else
 const std::vector<std::string> kDecoders = {"vulkan", "vaapi", "software"};
 #endif
+
+// SessionHello.client_name: this machine's name without a domain, what the
+// host labels our shared folders with ("Home (saiko-pc01)"). Empty if
+// there's none to be had.
+std::string machine_name() {
+	std::string name;
+#ifdef _WIN32
+	wchar_t wide[256];
+	DWORD len = sizeof(wide) / sizeof(wide[0]);
+	if (GetComputerNameExW(ComputerNamePhysicalDnsHostname, wide, &len) && len > 0) {
+		int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, (int)len, nullptr, 0, nullptr, nullptr);
+		name.resize(bytes > 0 ? bytes : 0);
+		WideCharToMultiByte(CP_UTF8, 0, wide, (int)len, name.data(), bytes, nullptr, nullptr);
+	}
+#else
+	char host[256] = {};
+	if (gethostname(host, sizeof(host) - 1) == 0) {
+		name = host;
+	}
+#endif
+	return name.substr(0, name.find('.')); // macOS's "name.local", an FQDN
+}
 // SessionHello.capabilities: optional extensions this build understands
 // (gdp-spec.md §6.7). SDL's clipboard API is cross-platform, so spectre
 // offers clipboard sync unconditionally; it's the host that may have no
@@ -234,6 +265,7 @@ void SessionClient::on_connected() {
 	for (const auto &decoder : kDecoders) {
 		hello->add_decoders(decoder);
 	}
+	hello->set_client_name(machine_name());
 	// gdp-spec.md §7.3: 10 bits per component, for the codecs the decoder
 	// probe said so of. Only for codecs actually offered -- a format for a
 	// codec not in `codecs` would be noise to the host.

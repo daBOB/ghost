@@ -599,9 +599,11 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 			ten_bit_codecs.push_back(format.codec());
 		}
 	}
+	client_name_ = ClientFiles::usable_client_name(hello.client_name());
 	negotiation_summary_ = "client offered codecs: " + join(offered_codecs) +
 		"\nclient decodes 10-bit: " + join(ten_bit_codecs) +
 		"\nclient decoders: " + join(to_vector(hello.decoders())) +
+		"\nclient name: " + (client_name_.empty() ? "(none)" : client_name_) +
 		"\nhost can encode: " + join(SessionServices::supported_video_codecs()) +
 		"\nconnection: " + (hello.via_gateway() ? "via a gateway (pyrowave is never used)" : "direct");
 	video_codec_.clear();
@@ -688,11 +690,11 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 		reset_session(static_cast<uint64_t>(gdp::ErrorCode::kNoCommonCodec));
 		return false;
 	}
-	WLOG_INFO("gdp: session codec %s at %u bits, %s (client decoders: %s), capabilities: %s, %s",
+	WLOG_INFO("gdp: session codec %s at %u bits, %s (client %s, decoders: %s), capabilities: %s, %s",
 		video_codec_.c_str(), services.session_bit_depth(),
 		session_matrix(video_codec_) == ColorMatrix::Bt709 ? "BT.709" : "BT.601",
-		join(to_vector(hello.decoders())).c_str(), join(capabilities_).c_str(),
-		hello.via_gateway() ? "via gateway" : "direct");
+		client_name_.empty() ? "unnamed" : client_name_.c_str(), join(to_vector(hello.decoders())).c_str(),
+		join(capabilities_).c_str(), hello.via_gateway() ? "via gateway" : "direct");
 
 	authenticated_ = true;
 	services.set_viewer_attached(true);
@@ -882,7 +884,7 @@ void GdpSession::start_file_receiver() {
 				*env.mutable_file_fetch() = fetch;
 				send_control(env);
 			},
-			config().files.bookmarks);
+			config().files.bookmarks, client_name_);
 		files_->on_answer = [this](std::unique_ptr<gdp::Stream> stream, const gdp::session::FileAnswer &answer,
 								std::vector<uint8_t> data) {
 			if (client_files_) {

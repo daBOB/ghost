@@ -4,6 +4,7 @@
 #include "session/client_files.hpp"
 
 #include "gdp/clock.hpp"
+#include "gdp/file_transfer.hpp"
 #include "session/file_bookmarks.hpp"
 #include "util/log.hpp"
 
@@ -19,8 +20,8 @@ constexpr int kTickMs = 1000;
 } // namespace
 
 ClientFiles::ClientFiles(struct wl_event_loop *loop, std::function<void(const gdp::session::FileFetch &)> send_fetch,
-	bool bookmarks)
-	: loop_(loop), send_fetch_(std::move(send_fetch)), bookmarks_(bookmarks),
+	bool bookmarks, std::string client_name)
+	: loop_(loop), send_fetch_(std::move(send_fetch)), bookmarks_(bookmarks), client_name_(std::move(client_name)),
 	  files_([this](uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset, bool listing) {
 		  gdp::session::FileFetch fetch;
 		  fetch.set_fetch_id(id);
@@ -57,6 +58,10 @@ std::string ClientFiles::mount_directory() {
 
 bool ClientFiles::can_mount() {
 	return gdp::RemoteFiles::available() && !mount_directory().empty();
+}
+
+std::string ClientFiles::usable_client_name(const std::string &name) {
+	return name.size() <= 64 && gdp::valid_file_name(name) ? name : "";
 }
 
 void ClientFiles::clean_up_after_crash() {
@@ -133,7 +138,8 @@ void ClientFiles::share(const gdp::session::FileShare &share) {
 	}
 	share_paths_[share.share_id()] = path;
 	if (bookmarks_) {
-		add_file_bookmark(path, share.name() + " (shared by the client)");
+		add_file_bookmark(path,
+			share.name() + " (" + (client_name_.empty() ? "shared by the client" : client_name_) + ")");
 	}
 	WLOG_INFO("files: the client shares \"%s\", at %s", share.name().c_str(), path.c_str());
 }

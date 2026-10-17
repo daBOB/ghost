@@ -760,6 +760,13 @@ stream, as soon as the connection is up.
 | 10 | `capabilities` | repeated string | Extensions the client understands (§6.7). |
 | 11 | `refine_formats` | repeated `RefineFormat` | Refinement tile formats the client accepts beyond `BGR8` (§9.5). |
 | 12 | `decoders` | repeated string | Informational: the client's decoder backends, for example `vulkan`, `vaapi`, `d3d11va`, `software`. |
+| 13 | `client_name` | string | Informational: the client machine's name, its hostname without a domain. |
+
+`decoders` and `client_name` are for the host's logs and user interface
+(the reference host labels the client's shared folders with the name,
+§7.12); a host MUST tolerate them empty, and treats `client_name` as
+untrusted text: one that breaks §7.12's name rules or is over 64 bytes
+is taken as empty.
 
 `DisplayDescriptor`:
 
@@ -1642,8 +1649,9 @@ is later, dropping the one read from least recently first. With
 shared folders read-only with FUSE under `$XDG_RUNTIME_DIR/ghost/files`
 (`clip/<list_id>/`, `shares/<name>/`), puts paths into it on the
 session's clipboard, gives each shared folder a GTK bookmark and a KDE
-Places entry for the session, and re-lists a shared folder when its
-listing is more than 5 s old. It offers neither capability where it
+Places entry for the session labelled with the folder's name and
+`SessionHello.client_name` ("Home (saiko-pc01)"), and re-lists a
+shared folder when its listing is more than 5 s old. It offers neither capability where it
 can't mount (no `/dev/fuse`, `fusermount3` or runtime directory): a
 client that negotiated `file-clipboard` no longer sends its copies as
 text. The reference client mounts the host's

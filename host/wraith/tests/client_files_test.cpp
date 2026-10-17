@@ -150,7 +150,7 @@ int main() {
 	gdp::Transport server, client;
 	std::deque<gdp::session::FileFetch> control; // host -> client, carried by hand
 	auto client_files = std::make_unique<wraith::ClientFiles>(
-		loop, [&](const gdp::session::FileFetch &f) { control.push_back(f); }, true);
+		loop, [&](const gdp::session::FileFetch &f) { control.push_back(f); }, true, "saiko-pc01");
 	wraith::FileReceiver receiver(loop, dir.string(), [](uint64_t code) { fprintf(stderr, "protocol error %llu\n", (unsigned long long)code); },
 		[](const std::string &, const std::string &) {});
 	receiver.on_answer = [&](std::unique_ptr<gdp::Stream> s, const gdp::session::FileAnswer &a,
@@ -265,7 +265,17 @@ int main() {
 	client_files->share(share);
 	const fs::path share_dir = mnt / "shares" / "client-shared";
 	std::string gtk = read_file(wraith::gtk_bookmarks_path());
-	CHECK(gtk.find(gdp::file_uri(share_dir.string()) + " client-shared (shared by the client)") != std::string::npos);
+	// Labelled with the client's name.
+	CHECK(gtk.find(gdp::file_uri(share_dir.string()) + " client-shared (saiko-pc01)") != std::string::npos);
+	CHECK(read_file(wraith::kde_places_path()).find("<title>client-shared (saiko-pc01)</title>") != std::string::npos);
+	// A name the client sends is kept only if it is a usable one.
+	CHECK(wraith::ClientFiles::usable_client_name("saiko-pc01") == "saiko-pc01");
+	CHECK(wraith::ClientFiles::usable_client_name("").empty());
+	CHECK(wraith::ClientFiles::usable_client_name("pc\nfile:///etc evil").empty());
+	CHECK(wraith::ClientFiles::usable_client_name("a/b").empty());
+	CHECK(wraith::ClientFiles::usable_client_name(std::string(65, 'x')).empty());
+	CHECK(wraith::ClientFiles::usable_client_name(std::string(64, 'x')).size() == 64);
+	CHECK(wraith::ClientFiles::usable_client_name("bad\xff").empty());
 	std::string xbel = read_file(wraith::kde_places_path());
 	CHECK(xbel.find("<bookmark href=\"" + gdp::file_uri(share_dir.string()) + "\">") != std::string::npos);
 	CHECK(xbel.find("file:///home/u") != std::string::npos);

@@ -363,6 +363,8 @@ private:
 	bool last_list_empty_ = true;
 	// file-clipboard: lists carry what is in copied folders.
 	bool file_tree_ = false;
+	// SessionHello.client_name, checked: a usable name, or empty.
+	std::string client_name_;
 	// The client's copied files and shared folders, mounted (file-clipboard,
 	// file-share); null unless one is in effect.
 	std::unique_ptr<ClientFiles> client_files_;
