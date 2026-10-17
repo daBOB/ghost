@@ -799,7 +799,6 @@ bool VideoImageSource::ensure_shared_texture(AVD3D11VADeviceContext *d3d11, uint
 	destroy_shared_texture();
 	ID3D11Device *device = d3d11->device;
 
-	D3D11_TEXTURE2D_DESC desc{};
 	// The NV12/P010 -> RGB converter, first: which output format the
 	// texture gets depends on what it can write. Fixed-function video
 	// hardware, so this costs far less than the shader pass it replaces
