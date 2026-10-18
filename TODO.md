@@ -78,10 +78,17 @@ Limitations section.
   copy, and a clipboard manager taking the offer over. What it is built
   on is tested end to end (`wraith_remote_files_test`,
   `wraith_client_files_test`, and a headless client against labwc).
-- Pasting the host's files into Windows Explorer isn't implemented: it
-  needs virtual files (`IDataObject` with `FILEGROUPDESCRIPTORW` and
-  `FILECONTENTS`), whose reads arrive on the main thread that also runs
-  the connection. Copying from Explorer to the host (`CF_HDROP`) is
-  written but untested on Windows. The Finder has neither.
+- Pasting the host's files into Windows Explorer (virtual files,
+  `host_files_clipboard_win.*`) is tested only against an in-memory host
+  through `Shell.Application`'s Paste: nested and unlisted folders, an
+  empty file, 5 MiB, the offer gone after teardown. Untested against a
+  real host: a file over 4 GiB, pasting to the desktop, a network share,
+  Outlook or a browser's upload field, cancelling in Explorer's progress
+  dialog, a disconnect mid-paste, a host text copy replacing the offer, a
+  Windows copy right after one, Win+V's history. Whether a read waiting
+  on the host holds up other calls into the offer enough to need the
+  streams on a thread of their own is unmeasured. Copying from Explorer
+  to the host (`CF_HDROP`) is written but untested on Windows. The
+  Finder has neither.
 - A FUSE mount under `$XDG_RUNTIME_DIR` may be out of a Flatpak file
   manager's sight (the document portal would be the way in).

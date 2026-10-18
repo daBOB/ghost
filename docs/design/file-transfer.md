@@ -7,8 +7,9 @@ host lists the files its user copies, which the client fetches the same
 way, one stream per file. With `file-clipboard` a copy pastes through the
 desktop's own file manager both ways, folders included, and with
 `file-share` the client's folders show up in the host's file manager:
-each side mounts the other's files with FUSE and the bytes come over as
-they are read ("Paste and shared folders" below).
+each side mounts the other's files with FUSE (a Windows client offers
+Explorer virtual files instead) and the bytes come over as they are
+read ("Paste and shared folders" below).
 
 Code: libgdp's additional streams (`transport.hpp`,
 `src/transport/quic_conn.cpp`), `file_transfer.hpp` and `file_list.hpp`,
@@ -16,7 +17,8 @@ which both ends share, and `remote_files.hpp` / `remote_mount.hpp`, the
 mount; `host/wraith/src/session/file_receiver.*`, `file_sender.*` and
 `client_files.*` on the host, and the clipboard sinks
 (`session/clipboard_sync.*`, `screencast/*_clipboard.*`) for what was
-copied; `client/spectre/src/net/local_files.*`, `clipboard_files.*` and
+copied; `client/spectre/src/net/local_files.*`, `clipboard_files.*`,
+`host_file_reads.*`, `host_file_tree.*`, `host_files_clipboard_win.*` and
 `stream/stream_session.cpp` on spectre.
 
 The client opens every stream, both ways (a fetch is a request on a
@@ -190,6 +192,35 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
   says session-is-owner), or a data-control source (whose echo is
   compared with what it offers). Always a copy, never a cut: nothing
   deletes an original across.
+- **Windows** has no FUSE, so spectre puts the host's list on the
+  clipboard as Explorer's virtual files instead of paths
+  (`host_files_clipboard_win.*`): an `IDataObject` offering
+  `FILEGROUPDESCRIPTORW` (every file and folder by its path from the
+  paste target), `FILECONTENTS` (an `IStream` per file), a copy
+  `Preferred DropEffect`, `Ghost.HostFiles` (so the clipboard update its
+  own offer causes, which has no SDL owner, is ignored) and
+  `ExcludeClipboardContentFromMonitorProcessing` (out of Win+V's history),
+  with `IDataObjectAsyncCapability` so Explorer copies off its UI thread.
+  No `CF_HDROP`, and nothing fetched until a paste asks: the descriptors
+  are built then (`HostFileTree`), first listing every folder the list
+  left unlisted (at most `kMaxFileListTotal` entries and 60 s, or the
+  paste fails rather than leaving half a tree), and leaving out names
+  Windows can't hold (`gdp::windows_safe()`), names taken twice in a
+  folder ignoring case, and paths past `MAX_PATH`, logged.
+  - **Threads.** Explorer's calls come over COM to the thread that owns
+    the object's apartment: one of its own (an STA with a message-only
+    window), which blocks in a read until the host's bytes come, one read
+    at a time. It never touches the connection: it posts each read to
+    `HostFileReads`, which the main thread dispatches every pass, opening
+    a "file" stream as the mount's requests do and handing the bytes
+    across. A stream's credit goes back only as the reading thread takes
+    the bytes, so a slow paste target holds the host back. A request the
+    host leaves unanswered for `kFileReplyTimeoutMs`, or goes quiet on
+    that long while its reader waits, fails; Explorer reports it.
+  - **Lifetime.** Disconnect and session end fail every read at once,
+    then take the offer back (`OleSetClipboard(nullptr)` if it is still
+    ours; never `OleFlushClipboard`, which would fetch every file). A new
+    list replaces the offer; one with no files leaves it, as on Linux.
 - **The client's copies.** spectre reads copied files from the clipboard
   (SDL's mime types; Explorer's `CF_HDROP` on Windows), sends them as a
   `FileList` built the same way, and answers `FileFetch` from
@@ -215,11 +246,14 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
 
 - No resumption: a connection lost mid-transfer loses the partial file.
   Uploads (drag and drop) don't take folders.
-- Pasting the host's files into Windows Explorer isn't implemented: it
-  needs Explorer's virtual files (`IDataObject` with
-  `FILEGROUPDESCRIPTORW`/`FILECONTENTS`), whose reads arrive on the main
-  thread that also runs the connection. macOS has neither FUSE nor that.
-  Copying from Explorer to the host works.
+- On Windows, every read of a paste runs on the clipboard's one thread:
+  while it waits on the host, other calls into the offer (another
+  program asking what the clipboard holds) wait too. Explorer copies one
+  file at a time, so a paste itself isn't slowed. Paths past `MAX_PATH`
+  are left out.
+- macOS has neither FUSE nor virtual files, so the host's copies can't
+  be pasted there; `NSFilePromiseProvider` would be the way, reading
+  through the same `HostFileReads`.
 - Sandboxed (Flatpak) file managers may not see a mount under
   `$XDG_RUNTIME_DIR`.
 - File data and the client's StatsReports share the client's uplink. A

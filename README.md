@@ -112,8 +112,9 @@ sudo pacman -S --needed base-devel cmake ninja pkgconf git curl \
 At runtime, a host needs the compositor of each session type it offers
 (`labwc`, GNOME or Plasma), and `foot` for the terminal session; a type
 whose programs are missing is not listed. Pasting files across and shared
-folders need FUSE (`fusermount3`) on both ends; libfuse3's headers at
-build time (optional: without them both ends build and leave it out).
+folders need FUSE (`fusermount3`) on both ends, except that a Windows
+client pastes the host's files without it; libfuse3's headers at build
+time (optional: without them both ends build and leave it out).
 
 ### Build
 

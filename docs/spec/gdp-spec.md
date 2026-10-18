@@ -1655,7 +1655,9 @@ shared folder when its listing is more than 5 s old. It offers neither capabilit
 can't mount (no `/dev/fuse`, `fusermount3` or runtime directory): a
 client that negotiated `file-clipboard` no longer sends its copies as
 text. The reference client mounts the host's
-copied files the same way under `$XDG_RUNTIME_DIR/spectre/<pid>`.
+copied files the same way under `$XDG_RUNTIME_DIR/spectre/<pid>`; on
+Windows, which has no FUSE, it offers them on the clipboard as
+Explorer's virtual files and fetches each when it is pasted.
 
 ---
 
