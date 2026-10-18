@@ -24,6 +24,10 @@ struct Prefs {
 	// lossless layer (off sends RefinePause). spectre -R overrides it for
 	// one session.
 	bool lossless = true;
+	// The menu's Presentation row: low latency (the newest frame replaces
+	// one waiting for the display) or smooth (every frame waits its turn
+	// for vsync). spectre -L overrides it for one session.
+	bool low_latency = true;
 };
 
 inline constexpr double kMinMouseSensitivity = 0.25;

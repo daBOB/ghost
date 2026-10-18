@@ -190,7 +190,8 @@ decode, presentation and audio together and captures input.
   fullscreen (not in kiosk mode), the view (fit or actual size), the
   resolution page (`ResolutionChange`, answered by `DisplaysChanged`)
   Lossless Refinement, which pauses or resumes the layer
-  (`RefinePause`, gdp-spec.md §7.8) and is remembered like the view, and
+  (`RefinePause`, gdp-spec.md §7.8) and is remembered like the view,
+  Presentation (see [presentation](#presentation)), also remembered, and
   statistics. Input: capture mouse, mouse sensitivity, and the
   controllers' mode, raw or Xbox emulation, when the session can take
   raw controllers ([gamepads](audio-cursor-gamepad.md#raw-controllers)).
@@ -207,8 +208,27 @@ decode, presentation and audio together and captures input.
   lost of the trailing 64, video Mb/s and a latency bar (green at 0 ms
   to red at 100 ms of decode plus present).
 - **Redraws.** UI-only changes re-present the last frame, coalesced to
-  one per main-loop iteration: a present blocks on vsync, so one per
-  mouse-motion event would back the event queue up into pointer lag.
+  one per main-loop iteration and at most one per display refresh: a
+  smooth present blocks on vsync, so one per mouse-motion event would
+  back the event queue up into pointer lag, and a low-latency one
+  doesn't block, so it would draw frames nobody sees.
+
+### Presentation
+
+Everything on the client runs on one thread: SDL input, the network,
+decode and present. Whatever present blocks for, input and the acks
+wraith paces by wait too. spectre therefore presents with Vulkan's
+MAILBOX by default ("low latency", `-L on`): a new frame replaces one
+still waiting for the display rather than queueing behind it, so present
+returns at once and the screen always shows the newest frame. FIFO
+("smooth", `-L off`, and wherever the surface offers no MAILBOX) shows
+every frame for a refresh in turn, steadier when the stream's rate
+matches the display's, but present blocks until the display takes a
+frame and a frame can wait a few refreshes behind others. The difference
+is starkest on a display slower than the stream: a 4K monitor held to
+30 Hz by HDMI 1.4 under FIFO spent 33 ms of every frame in present, and
+the queued frames showed as input lag. The session menu's Presentation
+row switches it mid-session (a swapchain rebuild) and is remembered.
 - **Gamepads** (`-G`) up to four. A standard pad sends one snapshot per
   slot per loop turn; a raw one (`input/raw_controller.cpp`) sends each
   input report from its own reader thread as it arrives
@@ -246,8 +266,8 @@ plane, the cursor, the tile outlines and the pointer mapping together.
 wire. On the client, `src/audio/` decodes Opus through a jitter buffer
 (6 frames, 60 ms target) and plays through SDL3's
 `SDL_OpenAudioDeviceStream`, pulled from SDL's audio thread, not paced
-from the main loop, which blocks in the vsync'd `present()` for most of
-every video frame. When the buffer runs completely empty it stops,
+from the main loop, which can block in a smooth (vsync'd) `present()`
+for most of every video frame. When the buffer runs completely empty it stops,
 re-buffers and re-anchors the expected sequence number on the next
 arrival. That is also what makes a long silence at the source safe:
 wraith's sequence counter freezes while it has nothing to send, and

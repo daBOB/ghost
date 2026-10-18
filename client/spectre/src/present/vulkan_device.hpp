@@ -209,6 +209,17 @@ public:
 	VkImage swapchain_image(uint32_t index) const { return swapchain_images_[index]; }
 	VkImageView swapchain_view(uint32_t index) const { return swapchain_views_[index]; }
 
+	// Low-latency presentation (spectre -L, the session menu's Presentation
+	// row): MAILBOX, where a new frame replaces the one waiting for the
+	// display rather than queueing behind it, so presenting never blocks
+	// on vsync and what reaches the screen is always the newest frame.
+	// Off, or on a surface that offers no MAILBOX, FIFO: every frame waits
+	// its turn. Takes effect at the next swapchain (re)build.
+	void set_low_latency(bool on) { want_mailbox_ = on; }
+	bool low_latency() const { return want_mailbox_; }
+	// Whether the surface offers MAILBOX at all. Valid after init().
+	bool supports_low_latency() const { return mailbox_supported_; }
+
 	// Waits for the device to go idle, then drops and rebuilds the swapchain
 	// at the window's current pixel size. For window resizes and
 	// VK_ERROR_OUT_OF_DATE_KHR.
@@ -320,6 +331,11 @@ private:
 	uint8_t luid_[VK_LUID_SIZE] = {};
 	bool luid_valid_ = false;
 #endif
+
+	bool want_mailbox_ = true;
+	bool mailbox_supported_ = false;
+	// The mode the swapchain was last built with, logged when it changes.
+	VkPresentModeKHR present_mode_ = VK_PRESENT_MODE_MAX_ENUM_KHR;
 
 	VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
 	VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;

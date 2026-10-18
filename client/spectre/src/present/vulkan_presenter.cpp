@@ -545,6 +545,21 @@ void VulkanPresenter::notify_resized() {
 	impl_->resize_pending = true;
 }
 
+void VulkanPresenter::set_low_latency(bool on) {
+	if (on != impl_->device.low_latency()) {
+		impl_->device.set_low_latency(on);
+		impl_->resize_pending = true;
+	}
+}
+
+bool VulkanPresenter::low_latency() const {
+	return impl_->device.low_latency();
+}
+
+bool VulkanPresenter::supports_low_latency() const {
+	return impl_->device.supports_low_latency();
+}
+
 void VulkanPresenter::set_cursor_shape(uint32_t width, uint32_t height, int32_t hotspot_x, int32_t hotspot_y,
 	const uint8_t *argb8888) {
 	impl_->overlay.set_cursor_shape(width, height, hotspot_x, hotspot_y, argb8888);

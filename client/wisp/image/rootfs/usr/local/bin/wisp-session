@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+# SPDX-License-Identifier: GPL-3.0-only
+# Run by labwc in place of the greeter (wisp-kiosk.service's -S): scale a
+# 4K-class output to 200% first, so the greeter and spectre's own UI (its
+# menu, toolbar and statistics) are drawn at a readable size. The stream
+# isn't scaled: spectre renders at the output's physical pixels
+# (SDL_WINDOW_HIGH_PIXEL_DENSITY), and the greeter asks the host for that
+# many (SpectreSettings::to_args()). Then it becomes the greeter, so labwc
+# still exits when the greeter does.
+wlr-randr | awk '
+	/^[^ ]/ { output = $1 }
+	/current\)/ { split($1, size, "x"); if (size[1] + 0 >= 3840) print output }
+' | while read -r output; do
+	wlr-randr --output "$output" --scale 2
+done
+exec /usr/local/bin/wisp-greeter "$@"

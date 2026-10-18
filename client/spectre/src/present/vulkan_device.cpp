@@ -716,6 +716,21 @@ bool VulkanDevice::create_swapchain() {
 	}
 	swapchain_format_ = chosen.format;
 
+	uint32_t mode_count = 0;
+	vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &mode_count, nullptr);
+	std::vector<VkPresentModeKHR> modes(mode_count);
+	vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &mode_count, modes.data());
+	mailbox_supported_ = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end();
+	VkPresentModeKHR present_mode =
+		want_mailbox_ && mailbox_supported_ ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+	if (present_mode != present_mode_) {
+		present_mode_ = present_mode;
+		SLOG_INFO("vulkan_device: presenting %s",
+			present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox (low latency)"
+				: mailbox_supported_                    ? "fifo (smooth)"
+														: "fifo (smooth; the surface has no mailbox)");
+	}
+
 	int w = 0, h = 0;
 	SDL_GetWindowSizeInPixels(window_, &w, &h);
 	swapchain_extent_.width = std::clamp((uint32_t)w, caps.minImageExtent.width, caps.maxImageExtent.width);
@@ -723,6 +738,11 @@ bool VulkanDevice::create_swapchain() {
 		std::clamp((uint32_t)h, caps.minImageExtent.height, caps.maxImageExtent.height);
 
 	uint32_t image_count = caps.minImageCount + 1;
+	if (present_mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+		// One on screen, one waiting for the display, one to draw into:
+		// with fewer, acquiring blocks after all.
+		image_count = std::max(image_count, 3u);
+	}
 	if (caps.maxImageCount > 0 && image_count > caps.maxImageCount) {
 		image_count = caps.maxImageCount;
 	}
@@ -739,7 +759,7 @@ bool VulkanDevice::create_swapchain() {
 	swap_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	swap_info.preTransform = caps.currentTransform;
 	swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	swap_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+	swap_info.presentMode = present_mode;
 	swap_info.clipped = VK_TRUE;
 
 	if (!vk_check(vkCreateSwapchainKHR(device_, &swap_info, nullptr, &swapchain_), "vkCreateSwapchainKHR")) {

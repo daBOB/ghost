@@ -41,6 +41,7 @@ enum class MenuAction {
 	kToggleStats,          // flip the statistics overlay (the caller also closes the menu)
 	kToggleCaptureMouse,   // flip mouse capture (ditto)
 	kToggleLossless,       // flip the lossless layer (ditto)
+	kTogglePresentation,   // flip presentation between low latency and smooth (ditto)
 	kToggleFullscreen,     // flip the window between windowed and fullscreen (ditto)
 	kToggleActualSize,     // flip the view between fit-to-window and actual size (ditto)
 	kToggleControllerMode, // flip forwarded controllers between raw and Xbox emulation (ditto)
@@ -80,6 +81,13 @@ public:
 	// "Off"), or nullopt for no row: the session didn't negotiate
 	// refinement. Owned by the caller (StreamSession::lossless_).
 	void set_lossless(std::optional<bool> on) { lossless_ = on; }
+	// Which label the presentation row shows ("Presentation: Low Latency"
+	// or "Smooth"); `available` false marks smooth as the only mode this
+	// display offers. Owned by the caller (the presenter).
+	void set_presentation(bool low_latency, bool available) {
+		low_latency_ = low_latency;
+		low_latency_available_ = available;
+	}
 	// Which label the fullscreen row shows ("Enter"/"Exit Fullscreen").
 	// Owned by the caller (the SDL window flags).
 	void set_fullscreen(bool fullscreen) { fullscreen_ = fullscreen; }
@@ -153,6 +161,7 @@ private:
 		kStatsToggle,
 		kCaptureMouseToggle,
 		kLosslessToggle,
+		kPresentationToggle,
 		kFullscreenToggle,
 		kViewToggle,
 		kControllerMode,
@@ -214,6 +223,8 @@ private:
 	bool stats_enabled_ = false;
 	bool capture_mouse_ = false;
 	std::optional<bool> lossless_;
+	bool low_latency_ = true;
+	bool low_latency_available_ = true;
 	bool fullscreen_ = false;
 	bool actual_size_ = false;
 	bool kiosk_ = false;

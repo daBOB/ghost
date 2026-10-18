@@ -60,6 +60,12 @@ Prefs load_prefs() {
 			} else if (value == "off") {
 				prefs.lossless = false;
 			}
+		} else if (key == "presentation") {
+			if (value == "low-latency") {
+				prefs.low_latency = true;
+			} else if (value == "smooth") {
+				prefs.low_latency = false;
+			}
 		}
 	}
 	return prefs;
@@ -75,6 +81,7 @@ void save_prefs(const Prefs &prefs) {
 	out << "mouse_sensitivity=" << prefs.mouse_sensitivity << "\n";
 	out << "view=" << (prefs.actual_size ? "actual" : "fit") << "\n";
 	out << "lossless=" << (prefs.lossless ? "on" : "off") << "\n";
+	out << "presentation=" << (prefs.low_latency ? "low-latency" : "smooth") << "\n";
 	if (!out) {
 		SLOG_ERROR("spectre: could not write %s; settings not saved", path.c_str());
 	}

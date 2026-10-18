@@ -149,6 +149,10 @@ struct StreamOptions {
 	// Unset (the default) uses whichever the session menu last picked
 	// (prefs.hpp), on until it picks otherwise.
 	std::optional<bool> lossless;
+	// Low-latency presentation to start with (spectre -L,
+	// VulkanDevice::set_low_latency()). Unset (the default) uses whichever
+	// the session menu last picked (prefs.hpp), on until it picks otherwise.
+	std::optional<bool> low_latency;
 	// Offer the "pyrowave" codec when the host is on a wired LAN
 	// (net/lan_link.hpp) -- on unless spectre -W. -C pyrowave offers it
 	// regardless of the link.
@@ -341,6 +345,9 @@ private:
 	// the per-frame readback. `save` records it as the menu's choice
 	// (prefs). No-op on a session that didn't negotiate "refine".
 	void set_lossless(bool on, bool save);
+	// Low-latency presentation on or off (VulkanPresenter::set_low_latency());
+	// `save` records it as the menu's choice (prefs).
+	void set_low_latency(bool on, bool save);
 	void toggle_fullscreen();
 	void toggle_stats();
 	// Fullscreen is the remote desktop: the keyboard is grabbed, so the
@@ -435,9 +442,11 @@ private:
 	// changes that happen between video frames (menu navigation, the
 	// pointer moving over the menu on an idle desktop). Coalesced: the
 	// main loop redraws at most once per iteration, after draining every
-	// pending SDL event, because a present blocks on vsync and doing one
-	// per mouse-motion event (hundreds a second) backs the event queue up
-	// into visible pointer lag.
+	// pending SDL event, and no more than once per display refresh. A
+	// smooth (FIFO) present blocks on vsync, so one per mouse-motion event
+	// (hundreds a second) would back the event queue up into visible
+	// pointer lag; a low-latency one doesn't block, and would draw
+	// hundreds of frames a second nobody sees.
 	void mark_ui_dirty() { ui_dirty_ = true; }
 	// rebuild_ui() and re-present the last frame if anything is dirty.
 	void flush_ui();
@@ -652,6 +661,9 @@ private:
 	bool indicators_drawn_ = false;
 	UiDrawList ui_;
 	bool ui_dirty_ = false;
+	// When flush_ui() last re-presented, which it does at most once per
+	// display refresh.
+	uint64_t ui_redraw_us_ = 0;
 
 	// Statistics: per-window accumulators and the last computed sample.
 	struct StatsAccum {

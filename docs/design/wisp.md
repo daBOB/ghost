@@ -89,6 +89,13 @@ greeter runs `swayidle` with `wlopm --off`/`--on` under labwc. spectre
 lets the screen sleep during a session, except for a minute after
 gamepad input, which the compositor never sees.
 
+A monitor whose current mode is 3840 or more pixels wide runs at 200%
+(`wisp-session`, which labwc starts in place of the greeter, sets it
+with `wlr-randr` first). That makes the greeter and spectre's menu,
+toolbar and statistics readable. The stream stays at the monitor's
+physical pixels: spectre renders at them and the greeter asks the host
+for that many.
+
 ## Limitations
 
 - The shared key is readable by anyone who can boot the image.

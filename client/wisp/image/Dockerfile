@@ -145,10 +145,11 @@ RUN case "$TARGETARCH" in \
 # kiosk menu, through wpctl) even on HDMI outputs without a hardware mixer;
 # pipewire-alsa routes ALSA's default device, which SDL plays to, through it.
 # swayidle and wlopm turn the display off after the profile's idle time
-# (the greeter's display_sleep.cpp).
+# (the greeter's display_sleep.cpp). wlr-randr sets a 4K-class output's
+# scale (wisp-session).
 COPY --from=build /out/runtime-packages /tmp/runtime-packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        labwc qt6-wayland fonts-dejavu-core swayidle wlopm \
+        labwc qt6-wayland fonts-dejavu-core swayidle wlopm wlr-randr \
         libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdecor-0-0 \
         libegl1 libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers \
         libasound2t64 alsa-ucm-conf pipewire pipewire-alsa wireplumber \

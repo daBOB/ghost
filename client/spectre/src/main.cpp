@@ -62,6 +62,10 @@ static void usage(const char *argv0) {
 	printf("  -R on|off lossless refinement: a lossless tile layer over the video (any codec)\n");
 	printf("            that makes settled text/UI bit-exact, at the cost of a per-frame readback\n");
 	printf("            on the host. Default: whichever the session menu last picked, on at first\n");
+	printf("  -L on|off low-latency presentation: a new frame replaces one still waiting for the\n");
+	printf("            display instead of queueing behind it (Vulkan mailbox); off, every frame\n");
+	printf("            waits its turn for vsync -- smoother, but up to a few refreshes behind.\n");
+	printf("            Default: whichever the session menu last picked, on at first\n");
 	printf("  -D        debug: briefly outline every lossless refinement tile in red as it lands,\n");
 	printf("            so it's visible which regions the host is refreshing losslessly\n");
 	printf("  -G        forward gamepads: local controllers are mirrored onto the host, if it\n");
@@ -190,6 +194,16 @@ int main(int argc, char *argv[]) {
 				options.lossless = true;
 			} else if (v && strcmp(v, "off") == 0) {
 				options.lossless = false;
+			} else {
+				usage(argv[0]);
+				return 1;
+			}
+		} else if (strcmp(arg, "-L") == 0) {
+			const char *v = next_value();
+			if (v && strcmp(v, "on") == 0) {
+				options.low_latency = true;
+			} else if (v && strcmp(v, "off") == 0) {
+				options.low_latency = false;
 			} else {
 				usage(argv[0]);
 				return 1;

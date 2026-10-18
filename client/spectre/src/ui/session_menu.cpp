@@ -193,6 +193,11 @@ std::vector<SessionMenu::Item> SessionMenu::items_for_page() const {
 				{ItemId::kLosslessToggle,
 					*lossless_ ? "Lossless Refinement: On" : "Lossless Refinement: Off"});
 		}
+		add(Group::kDisplay,
+			{ItemId::kPresentationToggle,
+				!low_latency_available_ ? "Presentation: Smooth (only mode here)"
+				: low_latency_          ? "Presentation: Low Latency"
+										: "Presentation: Smooth"});
 		add(Group::kDisplay, {ItemId::kStatsToggle, stats_enabled_ ? "Hide Statistics" : "Show Statistics"});
 		add(Group::kInput, {ItemId::kCaptureMouseToggle, capture_mouse_ ? "Release Mouse" : "Capture Mouse"});
 		add(Group::kInput, {ItemId::kMouseSensitivity, "Mouse Sensitivity", false, true});
@@ -248,6 +253,7 @@ MenuAction SessionMenu::activate(size_t index) {
 	case ItemId::kStatsToggle: return MenuAction::kToggleStats;
 	case ItemId::kCaptureMouseToggle: return MenuAction::kToggleCaptureMouse;
 	case ItemId::kLosslessToggle: return MenuAction::kToggleLossless;
+	case ItemId::kPresentationToggle: return MenuAction::kTogglePresentation;
 	case ItemId::kFullscreenToggle: return MenuAction::kToggleFullscreen;
 	case ItemId::kViewToggle: return MenuAction::kToggleActualSize;
 	case ItemId::kControllerMode: return MenuAction::kToggleControllerMode;

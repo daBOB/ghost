@@ -18,8 +18,8 @@ video, and the client stays silent.
 spectre decodes through a jitter buffer (60 ms target, Opus packet-loss
 concealment for a missing frame, the oldest frame dropped on overrun,
 re-buffering on a real underrun) and plays through SDL3, pulled from
-SDL's audio thread rather than paced from the main loop, which blocks in
-vsync'd presentation for most of a frame. Its toolbar and session menu
+SDL's audio thread rather than paced from the main loop, which can block
+in vsync'd presentation for most of a frame. Its toolbar and session menu
 mute session audio on the client alone: frames are still pulled through
 the jitter buffer, so unmuting plays what is current, but silence goes to
 the device. The host doesn't know.

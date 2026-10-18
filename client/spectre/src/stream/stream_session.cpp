@@ -247,6 +247,7 @@ int StreamSession::run() {
 	SLOG_INFO("spectre: mouse sensitivity %.2fx (captured mouse)", prefs_.mouse_sensitivity);
 	set_actual_size(options_.actual_size.value_or(prefs_.actual_size), false);
 	set_lossless(options_.lossless.value_or(prefs_.lossless), false);
+	set_low_latency(options_.low_latency.value_or(prefs_.low_latency), false);
 
 	main_loop();
 	if (prefs_dirty_) {
@@ -1962,6 +1963,14 @@ void StreamSession::set_lossless(bool on, bool save) {
 	}
 }
 
+void StreamSession::set_low_latency(bool on, bool save) {
+	presenter_.set_low_latency(on); // vulkan_device logs the mode it builds
+	if (save && prefs_.low_latency != on) {
+		prefs_.low_latency = on;
+		save_prefs(prefs_);
+	}
+}
+
 void StreamSession::set_actual_size(bool on, bool save) {
 	bool changed = on != actual_size_;
 	if (changed) {
@@ -2201,6 +2210,7 @@ void StreamSession::open_menu(bool confirm_end) {
 	menu_.set_lossless(gdp::has_capability(session_info_.capabilities, gdp::kCapabilityRefine)
 			? std::optional<bool>(lossless_)
 			: std::nullopt);
+	menu_.set_presentation(presenter_.low_latency(), presenter_.supports_low_latency());
 	menu_.set_mouse_sensitivity(prefs_.mouse_sensitivity);
 	// This machine's own volume; no slider when wpctl can't say.
 	std::optional<SystemVolumeState> volume = get_system_volume();
@@ -2281,6 +2291,18 @@ void StreamSession::apply_menu_action(MenuAction action) {
 		set_lossless(!lossless_, true);
 		toast_.show(lossless_ ? "Lossless refinement on: still text and images become pixel-exact"
 							  : "Lossless refinement off",
+			gdp::monotonic_us(), 3000000);
+		break;
+	case MenuAction::kTogglePresentation:
+		close_menu();
+		if (!presenter_.supports_low_latency()) {
+			toast_.show("This display only presents smooth: every frame waits for vsync", gdp::monotonic_us(),
+				3000000);
+			break;
+		}
+		set_low_latency(!presenter_.low_latency(), true);
+		toast_.show(presenter_.low_latency() ? "Presentation: low latency, always the newest frame"
+											 : "Presentation: smooth, every frame waits its turn for vsync",
 			gdp::monotonic_us(), 3000000);
 		break;
 	case MenuAction::kToggleFullscreen:
@@ -2542,6 +2564,16 @@ void StreamSession::flush_ui() {
 	if (!ui_dirty_ || !window_ready_) {
 		return;
 	}
+	// At most once per display refresh (see mark_ui_dirty()); held back,
+	// it stays dirty for a later iteration, at most the loop's 4 ms away.
+	SDL_DisplayID id = SDL_GetDisplayForWindow(window_);
+	const SDL_DisplayMode *mode = id ? SDL_GetCurrentDisplayMode(id) : nullptr;
+	float hz = mode && mode->refresh_rate > 0.0f ? mode->refresh_rate : 60.0f;
+	uint64_t now_us = gdp::monotonic_us();
+	if (now_us - ui_redraw_us_ < (uint64_t)(1e6f / hz)) {
+		return;
+	}
+	ui_redraw_us_ = now_us;
 	ui_dirty_ = false;
 	rebuild_ui();
 	presenter_.redraw();

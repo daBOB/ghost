@@ -27,7 +27,8 @@ Environment=WLR_LIBINPUT_NO_DEVICES=1
 # + runs it as root: forces every monitor but the first off, before labwc.
 ExecStartPre=+/usr/local/sbin/wisp-outputs
 # -S: labwc exits when the greeter does, and Restart brings both back.
-ExecStart=/usr/bin/labwc -C /etc/wisp/labwc -S /usr/local/bin/wisp-greeter
+# wisp-session scales a 4K-class output to 200%, then execs the greeter.
+ExecStart=/usr/bin/labwc -C /etc/wisp/labwc -S /usr/local/bin/wisp-session
 Restart=always
 RestartSec=2
 

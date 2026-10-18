@@ -149,6 +149,13 @@ public:
 	// swapchain at the new extent on the next present).
 	void notify_resized();
 
+	// Low-latency presentation on or off (VulkanDevice::set_low_latency());
+	// a change rebuilds the swapchain on the next present.
+	void set_low_latency(bool on);
+	bool low_latency() const;
+	// Whether low latency is available at all: the surface offers MAILBOX.
+	bool supports_low_latency() const;
+
 	// Presents the splash bitmap (spectre's app icon, centered) instead of
 	// a video frame -- there's a real gap between the window appearing and
 	// the first decoded frame (session accept, keyframe request/decode,
