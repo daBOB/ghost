@@ -1,10 +1,13 @@
-# Wisp image: a Debian trixie rootfs that boots into wisp-greeter under labwc
+# Wisp image: an Ubuntu 26.04 rootfs that boots into wisp-greeter under labwc
 # (a Wayland compositor, configured as a kiosk), which signs in to Veil and
 # runs spectre. `make rootfs` (client/wisp/Makefile) builds the `out` stage with
 # the repo root as context and drops vmlinuz, initrd and wisp.squashfs into
 # content/x86_64/; `make rootfs ARCH=arm64` builds the same for arm64 (UEFI
-# machines) into content/arm64/. Trixie, not bookworm: spectre needs OpenSSL
-# 3.5+ and SDL3, which bookworm doesn't have.
+# machines) into content/arm64/. Ubuntu 26.04 packages everything spectre
+# needs but PyroWave: OpenSSL 3.5, ngtcp2 with its OpenSSL QUIC helper, and
+# SDL 3.4. Debian trixie had neither of the last two new enough, and its
+# labwc (0.8) left spectre's fullscreen window at its opening size on a
+# 200%-scaled output.
 #
 # The build stage runs on the build machine's own architecture and
 # cross-compiles for the target's, so an x86 host builds arm64 (and an ARM
@@ -13,15 +16,28 @@
 # when the architectures differ.
 
 # --- build: spectre, wisp-greeter and wisp-agent ---------------------------
-FROM --platform=$BUILDPLATFORM debian:trixie-slim AS build
+FROM --platform=$BUILDPLATFORM ubuntu:26.04 AS build
 ARG BUILDARCH
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 # Tools that run during the build (compilers, protoc, glslangValidator,
 # wayland-scanner, Qt's moc/rcc/uic) are the build machine's; libraries are
-# the target's (Debian multiarch, :$TARGETARCH). Qt's host tools come from
-# the build machine's own qt6-base-dev, which co-installs with the target's.
-RUN if [ "$TARGETARCH" != "$BUILDARCH" ]; then dpkg --add-architecture "$TARGETARCH"; fi \
+# the target's (multiarch, :$TARGETARCH). Qt's host tools come from the build
+# machine's own qt6-base-dev, which co-installs with the target's. Ubuntu
+# keeps amd64 on archive.ubuntu.com and every other architecture on
+# ports.ubuntu.com, so a cross build pins the image's own sources to the
+# build machine's architecture and adds the target's archive beside them.
+RUN if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
+        archive_of() { case "$1" in amd64) echo http://archive.ubuntu.com/ubuntu ;; *) echo http://ports.ubuntu.com/ubuntu-ports ;; esac; }; \
+        . /etc/os-release \
+     && sed -i "/^Types:/a Architectures: $BUILDARCH" /etc/apt/sources.list.d/ubuntu.sources \
+     && printf '%s\n' 'Types: deb' "URIs: $(archive_of "$TARGETARCH")" \
+            "Suites: $VERSION_CODENAME $VERSION_CODENAME-updates $VERSION_CODENAME-security" \
+            'Components: main universe' "Architectures: $TARGETARCH" \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/target.sources \
+     && dpkg --add-architecture "$TARGETARCH"; \
+    fi \
  && apt-get update \
  && if [ "$TARGETARCH" = "$BUILDARCH" ]; then cc=build-essential; else cc="crossbuild-essential-$TARGETARCH"; fi \
  && apt-get install -y --no-install-recommends \
@@ -30,13 +46,14 @@ RUN if [ "$TARGETARCH" != "$BUILDARCH" ]; then dpkg --add-architecture "$TARGETA
         $(for pkg in libssl-dev libavcodec-dev libavutil-dev libopus-dev \
                 libva-dev libvulkan-dev libprotobuf-dev libzstd-dev qt6-base-dev \
                 libwayland-dev libxkbcommon-dev libdecor-0-dev libasound2-dev \
-                libdrm-dev libgbm-dev libegl-dev libgles-dev libudev-dev libdbus-1-dev; do \
+                libdrm-dev libgbm-dev libegl-dev libgles-dev libudev-dev libdbus-1-dev \
+                libsdl3-dev libngtcp2-dev libngtcp2-crypto-ossl-dev; do \
             echo "$pkg:$TARGETARCH"; done) \
  && rm -rf /var/lib/apt/lists/*
 # Every CMake configure below (and in build-pyrowave.sh) picks this up from
 # the environment. Empty for a native build.
 ENV CMAKE_TOOLCHAIN_FILE=/toolchain.cmake
-# Libraries built from source install here, for the target.
+# PyroWave, built from source, installs here, for the target.
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 RUN triplet_of() { case "$1" in amd64) echo x86_64-linux-gnu ;; arm64) echo aarch64-linux-gnu ;; esac; } \
  && triplet=$(triplet_of "$TARGETARCH") && host_triplet=$(triplet_of "$BUILDARCH") \
@@ -59,22 +76,6 @@ RUN triplet_of() { case "$1" in amd64) echo x86_64-linux-gnu ;; arm64) echo aarc
         > /toolchain.cmake; \
     fi \
  && cat /toolchain.cmake
-# Trixie's ngtcp2 (1.11) predates the crypto helper for OpenSSL 3.5's own
-# QUIC API (libngtcp2_crypto_ossl), so build it; static, so nothing to ship.
-ARG NGTCP2_REF=v1.16.0
-RUN git clone --depth 1 --branch "$NGTCP2_REF" https://github.com/ngtcp2/ngtcp2.git /ngtcp2 \
- && cmake -S /ngtcp2 -B /ngtcp2/build -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_TESTING=OFF \
-        -DENABLE_OPENSSL=ON -DENABLE_SHARED_LIB=OFF -DENABLE_STATIC_LIB=ON \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/usr/local \
- && cmake --build /ngtcp2/build -j"$(nproc)" && cmake --install /ngtcp2/build
-# Trixie's SDL3 is 3.2; spectre uses 3.4 API. Wayland, KMS/DRM and ALSA
-# only: there is no X server or sound server in the image.
-ARG SDL_REF=release-3.4.2
-RUN git clone --depth 1 --branch "$SDL_REF" https://github.com/libsdl-org/SDL.git /sdl \
- && cmake -S /sdl -B /sdl/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
-        -DSDL_X11=OFF -DSDL_PIPEWIRE=OFF -DSDL_PULSEAUDIO=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
- && cmake --build /sdl/build -j"$(nproc)" && cmake --install /sdl/build
 # PyroWave's C API, for spectre's "pyrowave" codec: the same script and pinned
 # commit the desktop builds use (both ends of a session must run the same draft
 # bitstream). Without it spectre builds without the codec and never offers it.
@@ -86,7 +87,7 @@ RUN cmake -S /src -B /build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
  && cmake --build /build -j"$(nproc)" --target spectre wisp-greeter wisp-agent \
  && mkdir -p /out/usr/local/bin /out/usr/local/lib \
  && cp /build/bin/spectre /build/bin/wisp-greeter /build/bin/wisp-agent /out/usr/local/bin/ \
- && cp -a /usr/local/lib/libSDL3.so.0* /usr/local/lib/libpyrowave-shared.so.0* /out/usr/local/lib/ \
+ && cp -a /usr/local/lib/libpyrowave-shared.so.0* /out/usr/local/lib/ \
  && mkdir -p /out/usr/local/share/doc/ghost \
  && cp /src/debian/copyright /out/usr/local/share/doc/ghost/copyright \
  && cp -a /usr/local/share/doc/pyrowave /out/usr/local/share/doc/ \
@@ -109,38 +110,45 @@ RUN triplet=$(cat /triplet) \
  && cat /out/runtime-packages
 
 # --- rootfs ----------------------------------------------------------------
-FROM debian:trixie-slim AS rootfs
+FROM ubuntu:26.04 AS rootfs
 ENV DEBIAN_FRONTEND=noninteractive
-# Set by BuildKit from --platform: amd64 or arm64, Debian's names too.
+# Set by BuildKit from --platform: amd64 or arm64, Ubuntu's names too.
 ARG TARGETARCH
-# non-free-firmware: AMD/Intel GPU firmware, without which amdgpu/i915 fall
-# back to a dumb framebuffer, and NVIDIA's GSP firmware, without which nouveau
-# fails to probe Turing and newer and leaves no DRM device at all.
-RUN sed -i 's/^Components: main$/Components: main non-free-firmware/' /etc/apt/sources.list.d/debian.sources
 # live-boot's initramfs fetches the squashfs (fetch=URL) into RAM and puts a
 # writable overlay on top. MODULES=most keeps the initrd bootable on NICs we
-# haven't seen yet. The PC GPU firmware only on amd64.
+# haven't seen yet; initramfs-tools goes in first, as what live-boot hooks
+# into (Ubuntu's kernels otherwise suggest dracut). The kernel by version, not
+# linux-image-generic: that metapackage depends on all of linux-firmware
+# (every vendor's, about 1 GB) and the microcode packages. The firmware, PC
+# GPUs and Realtek NICs on amd64 only: AMD's and Intel's, without which
+# amdgpu/i915 fall back to a dumb framebuffer, and NVIDIA's GSP firmware,
+# without which nouveau fails to probe Turing and newer and leaves no DRM
+# device at all.
 RUN case "$TARGETARCH" in \
-        amd64) firmware="firmware-amd-graphics firmware-intel-graphics firmware-nvidia-graphics firmware-realtek" ;; \
+        amd64) firmware="linux-firmware-amd-graphics linux-firmware-intel-graphics linux-firmware-nvidia-graphics linux-firmware-realtek" ;; \
         arm64) firmware="" ;; \
         *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac \
  && apt-get update && apt-get install -y --no-install-recommends \
         initramfs-tools \
  && echo 'MODULES=most' >> /etc/initramfs-tools/initramfs.conf \
+ && kernel=$(apt-cache depends linux-image-generic | sed -n 's/.*Depends: linux-image-\([0-9].*\)$/\1/p' | head -1) \
+ && [ -n "$kernel" ] \
  && apt-get install -y --no-install-recommends \
-        linux-image-$TARGETARCH live-boot \
+        "linux-image-$kernel" live-boot \
         systemd systemd-sysv systemd-resolved systemd-timesyncd libpam-systemd udev dbus kmod polkitd \
         bash iproute2 iputils-ping curl ca-certificates less pciutils usbutils \
+        openssh-server \
         $firmware \
  && rm -rf /var/lib/apt/lists/*
 # The kiosk: labwc (not cage: games' mouselook needs pointer-constraints,
 # which cage lacks; labwc's hard dependency on xwayland comes along, but it
 # only starts if an X client connects), and what spectre and the greeter
 # load at runtime beyond their direct links (Qt's Wayland plugin, SDL3's dlopen'd Wayland and ALSA,
-# Mesa's GL/Vulkan/VA-API drivers incl. lavapipe for GPU-less clients; Intel's
-# iHD VA-API driver on amd64, since mesa-va-drivers only has AMD and nouveau --
-# without it an N100-class client has no hardware decode over VA-API).
+# Mesa's GL/Vulkan/VA-API drivers incl. lavapipe for GPU-less clients, the
+# VA-API ones in mesa-libgallium; Intel's iHD VA-API driver on amd64, since
+# Mesa's only cover AMD and nouveau -- without it an N100-class client has no
+# hardware decode over VA-API).
 # PipeWire in the wisp user's session gives the client a volume (spectre's
 # kiosk menu, through wpctl) even on HDMI outputs without a hardware mixer;
 # pipewire-alsa routes ALSA's default device, which SDL plays to, through it.
@@ -151,7 +159,7 @@ COPY --from=build /out/runtime-packages /tmp/runtime-packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
         labwc qt6-wayland fonts-dejavu-core swayidle wlopm wlr-randr \
         libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdecor-0-0 \
-        libegl1 libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers \
+        libegl1 libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers mesa-libgallium \
         libasound2t64 alsa-ucm-conf pipewire pipewire-alsa wireplumber \
         $(if [ "$TARGETARCH" = amd64 ]; then echo intel-media-va-driver; fi) \
         $(cat /tmp/runtime-packages) \
@@ -162,9 +170,16 @@ RUN ldconfig && for bin in /usr/local/bin/spectre /usr/local/bin/wisp-greeter /u
     done
 COPY client/wisp/image/rootfs/ /
 # The kiosk user: no password, no shell login; logind hands its session the
-# seat (DRM, input, sound) while it is the active one on tty1.
-RUN useradd --create-home --shell /usr/sbin/nologin --groups audio,video,render wisp \
- && systemctl enable wisp-hostname wisp-ntp wisp-agent wisp-kiosk systemd-networkd systemd-resolved systemd-timesyncd getty@tty2 \
+# seat (DRM, input, sound) while it is the active one on tty1. The base
+# image's own "ubuntu" user, which has a login shell, goes.
+# sshd only through wisp-ssh.service (the boot server's WISP_SSH_KEY), never
+# Ubuntu's own units, and with no host keys in the image: anyone can fetch
+# the squashfs, so wisp-ssh makes them at boot.
+RUN userdel --remove ubuntu 2>/dev/null; \
+    useradd --create-home --shell /usr/sbin/nologin --groups audio,video,render wisp \
+ && rm -f /etc/ssh/ssh_host_* \
+ && systemctl mask ssh.service ssh.socket \
+ && systemctl enable wisp-hostname wisp-ntp wisp-agent wisp-kiosk wisp-ssh systemd-networkd systemd-resolved systemd-timesyncd getty@tty2 \
  && systemctl set-default graphical.target \
  && systemctl mask systemd-networkd-wait-online \
  && update-initramfs -u \
@@ -177,7 +192,7 @@ RUN echo "$WISP_VERSION" > /etc/wisp-release
 # --- pack ------------------------------------------------------------------
 # Only copies files and runs mksquashfs, so on the build machine's own
 # architecture: emulated, compressing the squashfs takes minutes.
-FROM --platform=$BUILDPLATFORM debian:trixie-slim AS pack
+FROM --platform=$BUILDPLATFORM ubuntu:26.04 AS pack
 RUN apt-get update && apt-get install -y --no-install-recommends squashfs-tools \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=rootfs / /rootfs

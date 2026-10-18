@@ -8,13 +8,13 @@ HTTP, and the client image it serves. Both are built from `client/wisp/`.
 
 ## Build the image
 
-`make rootfs` (`DOCKER="sudo docker"` if needed) builds a Debian trixie
+`make rootfs` (`DOCKER="sudo docker"` if needed) builds an Ubuntu 26.04
 image from `image/Dockerfile`, with the repo root as context, and writes
 `vmlinuz`, `initrd` and `wisp.squashfs` into `content/x86_64/`. The build
 compiles spectre, `wisp-greeter` (`greeter/`) and `wisp-agent` (`agent/`) on
-trixie, plus SDL 3.4
-and ngtcp2 from source (trixie's are too old). `live-boot`'s initramfs
-fetches the squashfs into RAM (`fetch=`, `ip=dhcp`) and overlays it.
+Ubuntu, plus PyroWave from source (no distro ships it); SDL 3.4, ngtcp2 and
+the rest are Ubuntu's packages. `live-boot`'s initramfs fetches the squashfs
+into RAM (`fetch=`, `ip=dhcp`) and overlays it.
 
 `make rootfs ARCH=arm64` builds the arm64 image (UEFI machines) into
 `content/arm64/`. The compile stage runs on the build machine's
@@ -33,7 +33,7 @@ ARM Mac builds the x86_64 image with `ARCH=x86_64`.
 Set on the boot server, they reach every client as kernel arguments.
 
 **Time.** The image has no battery-backed clock it can trust (a PC's holds local time, or nothing), so `systemd-timesyncd` sets the time: from the NTP servers the
-site's DHCP offers if any, else Debian's pool. To name the servers on the
+site's DHCP offers if any, else Ubuntu's (`ntp.ubuntu.com`). To name the servers on the
 boot server instead, set `WISP_NTP` (space or comma separated); it reaches
 the client as `wisp_ntp=`, and `wisp-ntp.service` then configures timesyncd
 with exactly those servers and turns off the NTP servers from DHCP, which
@@ -57,6 +57,19 @@ only QEMU guests, recognised by their SMBIOS manufacturer, `all` for a
 machine with a real serial line, `off` for none. For the test VM, libvirt's
 serial pty is that port: `virsh console <vm>`, or open the pty path in
 `virsh dumpxml` directly.
+
+`WISP_SSH_KEY` (an OpenSSH public key, ed25519 since the kernel command line
+has no room for a long RSA key) lets that key log in to every client as root
+over SSH, also for debugging. It reaches the client base64'd as
+`wisp.ssh_key=`, and `wisp-ssh.service` installs it as root's only
+authorized key and starts sshd: key only, no passwords. Unset, no SSH server
+runs. The host keys are made at each boot, since the image is fetched over
+plain HTTP and must hold no private keys, so they change at every reboot:
+
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@<client>
+
+It is independent of `WISP_SHELL`: SSH without a root shell open to anyone
+at the keyboard.
 
 Only x86_64 and arm64 images exist; the container serves `content/` via a
 bind mount, so updating the image needs no container rebuild.

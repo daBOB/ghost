@@ -12,6 +12,7 @@ services:
       WISP_KEY: ${WISP_KEY:?set WISP_KEY to the Wisp key (veild wisp-env prints it)}
       WISP_SHELL: ${WISP_SHELL:-0}
       WISP_SERIAL_CONSOLE: ${WISP_SERIAL_CONSOLE:-qemu}
+      WISP_SSH_KEY: ${WISP_SSH_KEY:-}
       WISP_NTP: ${WISP_NTP:-}
       WISP_KERNEL_ARGS: ${WISP_KERNEL_ARGS:-}
       HTTP_PORT: ${HTTP_PORT:-80}

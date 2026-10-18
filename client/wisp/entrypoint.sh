@@ -66,6 +66,22 @@ if [ "${WISP_SHELL:-0}" = 1 ]; then
     esac
 fi
 
+# WISP_SSH_KEY: one OpenSSH public key that may log in to the clients as
+# root (debugging only, like WISP_SHELL, but over the network). It goes on
+# the kernel command line base64'd, as wisp.ssh_key=, since it has spaces;
+# without it the clients run no sshd at all.
+if [ -n "${WISP_SSH_KEY:-}" ]; then
+    case "$WISP_SSH_KEY" in
+        ssh-*" "*|ecdsa-*" "*|sk-*" "*) ;;
+        *) echo "wisp: WISP_SSH_KEY is not an OpenSSH public key (ssh-ed25519 AAAA... comment)" >&2; exit 1 ;;
+    esac
+    ssh_key=$(printf '%s\n' "$WISP_SSH_KEY" | base64 -w 0)
+    # The kernel command line holds 2048 bytes on x86, and the rest of it
+    # needs room: an ed25519 key is about 140 here, RSA 4096 over 1000.
+    [ "${#ssh_key}" -le 600 ] || { echo "wisp: WISP_SSH_KEY is too long for the kernel command line; use an ed25519 key" >&2; exit 1; }
+    extra="$extra wisp.ssh_key=$ssh_key"
+fi
+
 # WISP_NTP: servers separated by spaces or commas, passed as wisp_ntp=a,b
 # (a kernel argument can't hold spaces).
 if [ -n "${WISP_NTP:-}" ]; then

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # wisp_ntp=host,host on the kernel command line (the boot server's WISP_NTP):
 # use exactly these NTP servers. Otherwise nothing is configured here, and
-# systemd-timesyncd takes the servers DHCP offers, else Debian's pool.
+# systemd-timesyncd takes the servers DHCP offers, else Ubuntu's.
 list=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^wisp_ntp=//p' | tail -n 1)
 [ -n "$list" ] || exit 0
 case "$list" in

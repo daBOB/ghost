@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+# SPDX-License-Identifier: GPL-3.0-only
+# Before wisp-ssh.service starts sshd: root's authorized key from
+# wisp.ssh_key= on the kernel command line (the boot server's WISP_SSH_KEY,
+# base64, as a kernel argument can't hold spaces), and host keys made fresh
+# this boot. The image carries none, since anyone can fetch the squashfs.
+set -eu
+key=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^wisp\.ssh_key=//p' | tail -n 1)
+if [ -z "$key" ]; then
+	echo "wisp-ssh: wisp.ssh_key is empty" >&2
+	exit 1
+fi
+install -d -m 700 /root/.ssh
+printf '%s' "$key" | base64 -d > /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+ssh-keygen -A

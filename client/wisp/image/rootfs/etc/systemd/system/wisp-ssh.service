@@ -1,0 +1,17 @@
+# Root over SSH by key, only when the boot server passes wisp.ssh_key
+# (WISP_SSH_KEY): debugging, like wisp.shell, but over the network. Ubuntu's
+# own ssh.service and ssh.socket are masked; this is the only way sshd runs.
+[Unit]
+Description=Wisp debug SSH server
+ConditionKernelCommandLine=wisp.ssh_key
+After=network.target
+
+[Service]
+ExecStartPre=/usr/local/sbin/wisp-ssh
+ExecStart=/usr/sbin/sshd -D
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
