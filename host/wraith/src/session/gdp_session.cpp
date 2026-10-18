@@ -1168,6 +1168,7 @@ void GdpSession::handle_stream_stats(uint32_t rtt_us, const gdp::session::Stream
 	last_highest_frame_id_acked_ = highest;
 
 	uint64_t report_us = gdp::monotonic_us();
+	note_client_timing(stats, report_us);
 	bool path_changed = path_rate_.expire(report_us);
 	for (const gdp::session::FrameTrain &train : stats.trains()) {
 		path_rate_.add(train.bytes(), train.span_us(), report_us);
@@ -1250,6 +1251,35 @@ void GdpSession::handle_stream_stats(uint32_t rtt_us, const gdp::session::Stream
 	service_owed_keyframe();
 }
 
+void GdpSession::note_client_timing(const gdp::session::StreamStats &stats, uint64_t now_us) {
+	constexpr uint64_t kWindowUs = 5'000'000;
+	ClientTiming &t = client_timing_;
+	if (t.window_start_us == 0) {
+		t.window_start_us = now_us;
+	}
+	// Both 0: no frame was presented in the report's interval, or a client
+	// that doesn't measure them.
+	if (stats.decode_us() != 0 || stats.present_us() != 0) {
+		t.reports++;
+		t.decode_sum_us += stats.decode_us();
+		t.present_sum_us += stats.present_us();
+		t.decode_max_us = std::max(t.decode_max_us, stats.decode_us());
+		t.present_max_us = std::max(t.present_max_us, stats.present_us());
+	}
+	uint64_t elapsed = now_us - t.window_start_us;
+	if (elapsed < kWindowUs) {
+		return;
+	}
+	if (t.reports > 0) {
+		WLOG_DEBUG("gdp: client last %.1fs: decode %.1f ms avg / %.1f max, present %.1f ms avg / %.1f max "
+				   "(%u reports)",
+			elapsed / 1e6, t.decode_sum_us / 1000.0 / t.reports, t.decode_max_us / 1000.0,
+			t.present_sum_us / 1000.0 / t.reports, t.present_max_us / 1000.0, t.reports);
+	}
+	t = ClientTiming{};
+	t.window_start_us = now_us;
+}
+
 void GdpSession::report_lost_frames(uint32_t highest, uint64_t new_loss) {
 	std::vector<int64_t> lost_pts;
 	for (uint64_t bits = new_loss; bits != 0; bits &= bits - 1) {
@@ -1329,11 +1359,12 @@ void GdpSession::apply_pacing() {
 		}
 	}
 	// Only a real move is worth a line: the estimate shifts a little with
-	// every large frame.
+	// every large frame. Debug, as the pace swings between the idle and
+	// the active rate many times a minute on a mostly still desktop.
 	if (logged_pacing_bps_ == 0 || paced * 10 < logged_pacing_bps_ * 8 ||
 		paced * 10 > logged_pacing_bps_ * 12) {
 		if (logged_pacing_bps_ != 0) {
-			WLOG_INFO("gdp: pacing %.0f -> %.0f Mbps (path %.1f Mbps from %zu frames, target %.1f Mbps)",
+			WLOG_DEBUG("gdp: pacing %.0f -> %.0f Mbps (path %.1f Mbps from %zu frames, target %.1f Mbps)",
 				logged_pacing_bps_ / 1e6, paced / 1e6, path_rate_.estimate_bps() / 1e6, path_rate_.samples(),
 				rate_->target_bps() / 1e6);
 		}

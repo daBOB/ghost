@@ -125,6 +125,12 @@ struct ExtImageCopyCapture::Impl {
 	// handed on with its pixels in on_ready and cleared there.
 	DamageRegion frame_damage;
 	bool damage_reported = false;
+	// The 5-second debug summary log_damage() keeps, as the PipeWire
+	// capture's log_summary() does.
+	static constexpr int64_t kSummaryWindowUs = 5'000'000;
+	int64_t summary_start_us = 0;
+	uint32_t summary_frames = 0, summary_with_damage = 0;
+	double summary_damage_sum = 0.0, summary_damage_max = 0.0;
 	std::function<void(uint32_t, uint32_t, int32_t, int32_t, const uint8_t *)> on_cursor_shape_cb;
 	std::function<void(double, double)> on_cursor_position_cb;
 	std::function<void()> on_cursor_hidden_cb;
@@ -529,8 +535,9 @@ struct ExtImageCopyCapture::Impl {
 	}
 
 	// The same report the PipeWire capture makes (pipewire_capture.cpp's
-	// read_damage_meta): once at INFO whether this compositor sends damage
-	// at all, then per frame at DEBUG how much of the frame it covers.
+	// read_damage_meta and log_summary): once at INFO whether this
+	// compositor sends damage at all, then every 5 seconds at DEBUG the
+	// frame rate and how much of the frame the damage covers.
 	void log_damage(const DamageRegion *damage) {
 		if (!damage_reported) {
 			damage_reported = true;
@@ -548,9 +555,32 @@ struct ExtImageCopyCapture::Impl {
 				area += (uint64_t)std::max(r.width, 0) * (uint64_t)std::max(r.height, 0);
 			}
 			uint64_t frame_area = (uint64_t)width * height;
-			WLOG_DEBUG("screencast: frame damage %zu rect(s), %.1f%% of the frame", damage->rects.size(),
-				frame_area ? 100.0 * (double)area / (double)frame_area : 0.0);
+			double percent = frame_area ? 100.0 * (double)area / (double)frame_area : 0.0;
+			summary_with_damage++;
+			summary_damage_sum += percent;
+			summary_damage_max = std::max(summary_damage_max, percent);
 		}
+		summary_frames++;
+
+		int64_t now_us = monotonic_now_us();
+		if (summary_start_us == 0) {
+			summary_start_us = now_us;
+			return;
+		}
+		int64_t elapsed = now_us - summary_start_us;
+		if (elapsed < kSummaryWindowUs) {
+			return;
+		}
+		char coverage[64] = "unknown";
+		if (summary_with_damage > 0) {
+			snprintf(coverage, sizeof(coverage), "%.1f%% of the frame avg / %.1f%% max",
+				summary_damage_sum / summary_with_damage, summary_damage_max);
+		}
+		WLOG_DEBUG("screencast: last %.1fs: %u frames (%.1f fps), damage %s", elapsed / 1e6, summary_frames,
+			summary_frames * 1e6 / (double)elapsed, coverage);
+		summary_start_us = now_us;
+		summary_frames = summary_with_damage = 0;
+		summary_damage_sum = summary_damage_max = 0.0;
 	}
 
 	// Maps the just-captured BO and hands its pixels to on_cpu_frame. The

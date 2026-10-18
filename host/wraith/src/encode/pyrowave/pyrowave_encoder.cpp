@@ -1065,8 +1065,8 @@ void PyrowaveEncoder::note_timing(int64_t copy_us, int64_t encode_us, size_t byt
 		return;
 	}
 	double n = (double)timing_.frames;
-	WLOG_INFO("pyrowave: last %.1fs: %u frames (%.1f fps), %.0f KB avg, copy %.1f ms avg / %.1f max, "
-			  "upload+encode %.1f ms avg / %.1f max",
+	WLOG_DEBUG("pyrowave: last %.1fs: %u frames (%.1f fps), %.0f KB avg, copy %.1f ms avg / %.1f max, "
+			   "upload+encode %.1f ms avg / %.1f max",
 		elapsed / 1e6, timing_.frames, n * 1e6 / (double)elapsed, timing_.bytes / n / 1000.0,
 		timing_.copy_sum_us / n / 1000.0, timing_.copy_max_us / 1000.0, timing_.encode_sum_us / n / 1000.0,
 		timing_.encode_max_us / 1000.0);

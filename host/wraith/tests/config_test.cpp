@@ -59,7 +59,7 @@ void test_shipped_file_is_the_defaults() {
 
 void test_values_apply() {
 	wraith::ConfigLoad load = wraith::load_config(write_file("set.toml",
-		"[log]\nlevel = \"info\"\n[network]\ncongestion_control = \"bbr\"\nrate_trace = true\n"
+		"[log]\nlevel = \"debug\"\n[network]\ncongestion_control = \"bbr\"\nrate_trace = true\n"
 		"pacing_multiplier = 4\npacing_floor_mbps = 900\n"
 		"[encode]\ngop = 0\nmax_bitrate_mbps = 45\nforce_software = true\nnvenc_zero_copy = false\n"
 		"bit_depth = 8\npyrowave_bpp = 0.75\n"
@@ -67,7 +67,7 @@ void test_values_apply() {
 		"[refine]\nburst_ms = 200\nsettle_ms = 120\n"));
 	CHECK(load.ok);
 	const wraith::WraithConfig &c = wraith::config();
-	CHECK(c.log.level == wraith::LogLevel::Info);
+	CHECK(c.log.level == wraith::LogLevel::Debug);
 	CHECK(c.network.congestion_control == "bbr");
 	CHECK(c.network.rate_trace);
 	CHECK(c.network.pacing_multiplier == 4);

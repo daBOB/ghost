@@ -13,7 +13,9 @@
 
 [log]
 # How much each session logs to the journal: "error", "info" or "debug".
-#level = "debug"
+# Debug adds summaries every 5 seconds of capture, encode, refinement and
+# the client's decode and present times, for chasing a performance problem.
+#level = "info"
 
 [network]
 # QUIC's own congestion controller, underneath wraith's rate control:

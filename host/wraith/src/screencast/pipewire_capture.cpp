@@ -86,6 +86,21 @@ struct PipeWireCapture::Impl {
 	// Likewise for read_damage_meta()'s result.
 	DamageRegion damage_scratch;
 	bool damage_meta_reported = false;
+	// read_damage_meta()'s last region as a share of the frame, in percent;
+	// negative when the frame carried no damage meta.
+	double damage_percent = -1.0;
+
+	// What the 5-second debug summary (log_summary()) reports: per-frame
+	// lines would be thousands a minute.
+	static constexpr int64_t kSummaryWindowUs = 5'000'000;
+	struct Summary {
+		int64_t window_start_us = 0;
+		uint32_t delivered = 0;
+		uint32_t superseded = 0;
+		uint32_t cursor_only = 0;
+		uint32_t with_damage = 0; // delivered frames whose damage meta was read
+		double damage_sum = 0.0, damage_max = 0.0;
+	} summary;
 
 	bool closed = false;
 
@@ -185,9 +200,7 @@ struct PipeWireCapture::Impl {
 			bool pixels_valid = buf->n_datas > 0 &&
 				!(buf->datas[0].chunk->flags & SPA_CHUNK_FLAG_CORRUPTED) && buf->datas[0].chunk->size > 0;
 			if (!pixels_valid) {
-				WLOG_DEBUG("screencast: cursor-only frame (chunk flags 0x%x size %u), pixels skipped",
-					buf->n_datas > 0 ? buf->datas[0].chunk->flags : 0u,
-					buf->n_datas > 0 ? buf->datas[0].chunk->size : 0u);
+				summary.cursor_only++;
 				pw_stream_queue_buffer(pw_stream_, b);
 				continue;
 			}
@@ -199,7 +212,7 @@ struct PipeWireCapture::Impl {
 					superseded.rects.insert(superseded.rects.end(), damage->rects.begin(),
 						damage->rects.end());
 				}
-				WLOG_DEBUG("screencast: video frame in buffer %p superseded before delivery", (void *)newest);
+				summary.superseded++;
 				pw_stream_queue_buffer(pw_stream_, newest);
 			}
 			newest = b;
@@ -207,6 +220,31 @@ struct PipeWireCapture::Impl {
 		if (newest) {
 			deliver(newest, superseded_unknown ? nullptr : &superseded);
 		}
+		log_summary(monotonic_now_us());
+	}
+
+	// At most every kSummaryWindowUs, at DEBUG: what arrived since the last
+	// summary. An idle desktop sends nothing, so a window can run long.
+	void log_summary(int64_t now_us) {
+		if (summary.window_start_us == 0) {
+			summary.window_start_us = now_us;
+			return;
+		}
+		int64_t elapsed = now_us - summary.window_start_us;
+		if (elapsed < kSummaryWindowUs) {
+			return;
+		}
+		char damage[64] = "unknown";
+		if (summary.with_damage > 0) {
+			snprintf(damage, sizeof(damage), "%.1f%% of the frame avg / %.1f%% max",
+				summary.damage_sum / summary.with_damage, summary.damage_max);
+		}
+		WLOG_DEBUG("screencast: last %.1fs: %u frames (%.1f fps), %u superseded, %u cursor-only skipped, "
+				   "damage %s",
+			elapsed / 1e6, summary.delivered, summary.delivered * 1e6 / (double)elapsed, summary.superseded,
+			summary.cursor_only, damage);
+		summary = Summary{};
+		summary.window_start_us = now_us;
 	}
 
 	// `superseded`: the damage of video frames dropped in favour of this
@@ -220,6 +258,12 @@ struct PipeWireCapture::Impl {
 			pts_us = header->pts / 1000;
 		}
 		const DamageRegion *damage = read_damage_meta(buf);
+		summary.delivered++;
+		if (damage_percent >= 0.0) {
+			summary.with_damage++;
+			summary.damage_sum += damage_percent;
+			summary.damage_max = std::max(summary.damage_max, damage_percent);
+		}
 		if (!superseded) {
 			damage = nullptr;
 		} else if (damage && !superseded->rects.empty()) {
@@ -240,7 +284,6 @@ struct PipeWireCapture::Impl {
 				frame.offset[i] = buf->datas[i].chunk->offset;
 				frame.stride[i] = (uint32_t)buf->datas[i].chunk->stride;
 			}
-			WLOG_DEBUG("screencast: video frame pts %" PRId64 " in buffer %p", pts_us, (void *)b);
 			if (on_dmabuf_frame_cb) {
 				on_dmabuf_frame_cb(frame, pts_us, b, damage);
 			}
@@ -299,17 +342,17 @@ struct PipeWireCapture::Impl {
 					(size_t)meta->size, damage_scratch.rects.size());
 			}
 		}
+		damage_percent = -1.0;
 		if (meta) {
 			// Area as a share of the frame, so a producer that "reports
-			// damage" by naming the whole screen every frame is visible
-			// in the log as ~100%.
+			// damage" by naming the whole screen every frame shows in the
+			// summary (log_summary()) as ~100%.
 			uint64_t area = 0;
 			for (const DamageRect &r : damage_scratch.rects) {
 				area += (uint64_t)std::max(r.width, 0) * (uint64_t)std::max(r.height, 0);
 			}
 			uint64_t frame_area = (uint64_t)neg_width * neg_height;
-			WLOG_DEBUG("screencast: frame damage %zu rect(s), %.1f%% of the frame",
-				damage_scratch.rects.size(), frame_area ? 100.0 * (double)area / (double)frame_area : 0.0);
+			damage_percent = frame_area ? 100.0 * (double)area / (double)frame_area : 0.0;
 		}
 		return damage_scratch.rects.empty() ? nullptr : &damage_scratch;
 	}

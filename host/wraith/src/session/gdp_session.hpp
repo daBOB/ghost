@@ -285,6 +285,10 @@ private:
 	// applies its target to the encoder, then asks for a keyframe if the
 	// report shows a lost frame no keyframe has already superseded.
 	void handle_stream_stats(uint32_t rtt_us, const gdp::session::StreamStats &stats);
+	// Folds a report's decode and present times (the client's own, averaged
+	// over the report) into client_timing_, and logs them every 5 seconds
+	// at DEBUG: the half of a frame's latency only the client can see.
+	void note_client_timing(const gdp::session::StreamStats &stats, uint64_t now_us);
 	// Requests a keyframe from the encoder and remembers which frame_id it
 	// can come as, earliest, so a loss it will repair doesn't ask again.
 	// `repair` asks for the video's IDR alone (Encoder::
@@ -396,6 +400,14 @@ private:
 	uint64_t pacing_bps_ = 0;
 	// The rate apply_pacing() last logged, so only real moves are.
 	uint64_t logged_pacing_bps_ = 0;
+	// note_client_timing()'s window: sums and maxima of the reports'
+	// averages since it was last logged.
+	struct ClientTiming {
+		uint64_t window_start_us = 0;
+		uint32_t reports = 0;
+		uint64_t decode_sum_us = 0, present_sum_us = 0;
+		uint32_t decode_max_us = 0, present_max_us = 0;
+	} client_timing_;
 	// The path's slowest hop, from spectre's frame trains.
 	PathRateEstimator path_rate_;
 	// Last slice size used, so a change (MTU discovery) is logged once.

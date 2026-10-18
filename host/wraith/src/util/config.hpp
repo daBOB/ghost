@@ -65,7 +65,11 @@ inline RefineOverrides default_refine_overrides(LinkProfile profile) {
 
 struct WraithConfig {
 	struct Log {
-		LogLevel level = LogLevel::Debug;
+		// Info: what a session did and why (codec, rate changes, profile
+		// switches, refinement repairs). Debug adds the periodic
+		// summaries -- capture, encode, refinement, client timing -- for
+		// chasing a performance problem.
+		LogLevel level = LogLevel::Info;
 	} log;
 
 	struct Network {
