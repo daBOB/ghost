@@ -132,6 +132,7 @@ add_executable(spectre
   src/prefs.cpp
   src/net/clipboard_files.cpp
   src/net/file_transfers.cpp
+  src/net/host_file_reads.cpp
   src/net/local_files.cpp
   src/net/my_folders.cpp
   src/net/session_client.cpp
@@ -252,6 +253,15 @@ target_include_directories(spectre_jitter_buffer_test PRIVATE src)
 spectre_warnings(spectre_jitter_buffer_test)
 target_link_libraries(spectre_jitter_buffer_test PRIVATE gdp PkgConfig::OPUS Threads::Threads)
 add_test(NAME spectre_jitter_buffer_test COMMAND spectre_jitter_buffer_test)
+
+add_executable(spectre_host_file_reads_test
+  tests/host_file_reads_test.cpp
+  src/net/host_file_reads.cpp
+)
+target_include_directories(spectre_host_file_reads_test PRIVATE src)
+spectre_warnings(spectre_host_file_reads_test)
+target_link_libraries(spectre_host_file_reads_test PRIVATE gdp Threads::Threads)
+add_test(NAME spectre_host_file_reads_test COMMAND spectre_host_file_reads_test)
 
 add_executable(spectre_ui_font_test
   tests/ui_font_test.cpp
