@@ -53,6 +53,10 @@ public:
 		// scaled into.
 		uint32_t width = 0;
 		uint32_t height = 0;
+		// The output scale to set with the size (the client's, wraith.toml's
+		// display.client_scale), or 0 to leave the compositor's own. A
+		// backend that can't set one ignores it.
+		double scale = 0.0;
 	};
 
 	// Establishes whatever the compositor needs before capture and input
@@ -85,9 +89,9 @@ public:
 	// For log lines: the compositor's name ("mutter", "kwin", ...).
 	virtual const char *name() const = 0;
 	// Whether open() makes the compositor's output Config's width x height
-	// itself, so a new size needs only close() and open() again against
-	// the same running compositor (ScreencastHost::request_resize()). A
-	// session that can't is never resized.
+	// (and scale) itself, so a new size needs only close() and open() again
+	// against the same running compositor (ScreencastHost::request_resize()).
+	// A session that can't is never resized.
 	virtual bool sizes_output_on_open() const { return false; }
 };
 

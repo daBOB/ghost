@@ -66,10 +66,11 @@ trace), `[encode]` (GOP length, bitrate ceiling, forcing the software
 encoder, NVENC's zero-copy input, the bit depth, PyroWave's ceiling, and
 which codecs are offered), `[refine]` (lossless refinement's settle time and
 bandwidth budget, with per-profile overrides in `[refine.lan]`,
-`[refine.internet]` and `[refine.mobile]`) and `[files]` (whether clients
+`[refine.internet]` and `[refine.mobile]`), `[files]` (whether clients
 may send files and where they go, whether they may fetch the files the
 user copies, and whether folders they share are mounted, with sidebar
-entries). It differs from ghostd.toml
+entries) and `[display]` (whether the desktop's scale follows the client's
+`DisplayDescriptor.scale`). It differs from ghostd.toml
 because of who reads it:
 
 - **Read per session.** Each wraith reads it once at startup, so a

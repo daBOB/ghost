@@ -26,9 +26,25 @@ const char *const kResolutions[] = {
 	"3840x2160",
 };
 
+// Offered in the scale combo after "Auto": KDE's own steps, as spectre -s
+// values and their labels.
+const struct {
+	const char *value;
+	const char *label;
+} kScales[] = {
+	{"1", "100%"},
+	{"1.25", "125%"},
+	{"1.5", "150%"},
+	{"1.75", "175%"},
+	{"2", "200%"},
+	{"2.5", "250%"},
+	{"3", "300%"},
+};
+
 constexpr auto kFullscreenKey = "spectre/fullscreen";
 constexpr auto kDecoderKey = "spectre/preferred_decoder";
 constexpr auto kResolutionKey = "spectre/resolution";
+constexpr auto kScaleKey = "spectre/scale";
 constexpr auto kCodecKey = "spectre/preferred_codec";
 constexpr auto kNetworkKey = "spectre/network_profile";
 constexpr auto kTileOutlineKey = "spectre/debug_tile_outlines";
@@ -53,6 +69,7 @@ SpectreSettings load_settings() {
 	settings.fullscreen = store.value(kFullscreenKey, false).toBool();
 	settings.preferred_decoder = store.value(kDecoderKey, settings.preferred_decoder).toString();
 	settings.resolution = store.value(kResolutionKey, QString()).toString();
+	settings.scale = store.value(kScaleKey, settings.scale).toString();
 	settings.preferred_codec = store.value(kCodecKey, QString()).toString();
 	settings.network_profile = store.value(kNetworkKey, settings.network_profile).toString();
 	// Gamepad forwarding defaults on here, unlike the spectre CLI's -G
@@ -76,6 +93,7 @@ void save_settings(const SpectreSettings &settings) {
 	store.setValue(kFullscreenKey, settings.fullscreen);
 	store.setValue(kDecoderKey, settings.preferred_decoder);
 	store.setValue(kResolutionKey, settings.resolution);
+	store.setValue(kScaleKey, settings.scale);
 	store.setValue(kCodecKey, settings.preferred_codec);
 	store.setValue(kNetworkKey, settings.network_profile);
 	store.setValue(kTileOutlineKey, settings.debug_tile_outlines);
@@ -114,6 +132,18 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 		tr("Match this display asks for this screen's full resolution, windowed or fullscreen. "
 		   "Reconnecting to a session that's already running resizes it to this too. The session "
 		   "menu changes it mid-session."));
+
+	ui->scaleCombo->addItem(tr("Auto"), QStringLiteral("auto"));
+	for (const auto &scale : kScales) {
+		ui->scaleCombo->addItem(QString::fromLatin1(scale.label), QString::fromLatin1(scale.value));
+	}
+	int scale_index = ui->scaleCombo->findData(settings.scale);
+	ui->scaleCombo->setCurrentIndex(scale_index >= 0 ? scale_index : 0);
+	ui->scaleCombo->setToolTip(
+		tr("How the host scales its desktop, on KDE and wlroots desktops. Auto matches this desktop's "
+		   "scale when the resolution is this screen's own (Match this display), so the remote desktop "
+		   "looks the same as this one, and uses 100% otherwise. A percentage applies whatever the "
+		   "resolution."));
 
 	ui->fullscreenCheck->setChecked(settings.fullscreen);
 	ui->followWindowCheck->setChecked(settings.follow_window);
@@ -228,6 +258,7 @@ SpectreSettings SettingsDialog::settings() const {
 	settings.view = ui->viewCombo->currentData().toString();
 	settings.preferred_decoder = ui->decoderCombo->currentData().toString();
 	settings.resolution = ui->resolutionCombo->currentData().toString();
+	settings.scale = ui->scaleCombo->currentData().toString();
 	settings.preferred_codec = ui->codecCombo->currentData().toString();
 	settings.network_profile = ui->networkCombo->currentData().toString();
 	settings.debug_tile_outlines = ui->tileOutlineCheck->isChecked();

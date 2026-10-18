@@ -68,10 +68,12 @@ public:
 	struct wl_event_loop *event_loop() const override { return event_loop_; }
 	uint32_t output_width() const override { return width_; }
 	uint32_t output_height() const override { return height_; }
-	// Closes capture and input, takes the new size, and reopens against
-	// the same running compositor, whose output the RemoteSession resizes
-	// on open(). Declines when the RemoteSession can't size its output.
-	bool request_resize(uint32_t width, uint32_t height) override;
+	double output_scale() const override { return scale_; }
+	// Closes capture and input, takes the new size and scale, and reopens
+	// against the same running compositor, whose output the RemoteSession
+	// resizes on open(). Declines when the RemoteSession can't size its
+	// output.
+	bool request_resize(uint32_t width, uint32_t height, double scale) override;
 	void redeliver_frame() override;
 	// Closes the FrameSource alone -- the RemoteSession, input and the
 	// compositor's output (GNOME's virtual monitor) stay -- and makes a
@@ -143,6 +145,9 @@ private:
 
 	struct wl_event_loop *event_loop_ = nullptr;
 	unsigned width_ = 1920, height_ = 1080;
+	// RemoteSession::Config::scale: 100% until a client asks for another,
+	// or 0 (the desktop's own) with wraith.toml's display.client_scale off.
+	double scale_ = 0.0;
 	int render_drm_fd_ = -1;
 	std::unique_ptr<SessionServices> session_;
 	std::unique_ptr<RemoteSession> remote_session_;

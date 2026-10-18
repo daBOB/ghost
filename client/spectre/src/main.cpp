@@ -44,6 +44,11 @@ static void usage(const char *argv0) {
 	printf("            minimize button; the toolbar's close, Disconnect and End Session still work\n");
 	printf("  -r WIDTHxHEIGHT  request this output resolution (sent in SessionHello.displays);\n");
 	printf("            the host may ignore it -- SessionAccept's negotiated size always wins\n");
+	printf("  -s scale  the remote desktop's scale, sent with -r and with resolution changes: auto\n");
+	printf("            (default) is this desktop's own scale when the size asked for is this\n");
+	printf("            screen's in pixels, else 100%%; a number (1, 1.5, 2) or percentage (150%%)\n");
+	printf("            sets it. The host applies it on KDE and wlroots desktops, unless it is\n");
+	printf("            configured to leave the scale alone\n");
 	printf("  -A        follow the window: when the window settles at a new size, ask the host\n");
 	printf("            for that resolution. Off by default, when the picture scales to the\n");
 	printf("            window and the resolution changes only from the session menu\n");
@@ -251,6 +256,24 @@ int main(int argc, char *argv[]) {
 			}
 			options.requested_width = w;
 			options.requested_height = h;
+		} else if (strcmp(arg, "-s") == 0) {
+			const char *v = next_value();
+			if (v && strcmp(v, "auto") == 0) {
+				options.scale.reset();
+			} else {
+				char *end = nullptr;
+				double scale = v ? strtod(v, &end) : 0.0;
+				if (end && *end == '%' && end[1] == '\0') {
+					scale /= 100.0;
+				} else if (!end || *end != '\0') {
+					scale = 0.0;
+				}
+				if (!(scale >= 0.5 && scale <= 4.0)) {
+					SLOG_ERROR("spectre: -s takes auto, or a scale from 0.5 to 4 (or 50%% to 400%%)");
+					return 1;
+				}
+				options.scale = scale;
+			}
 		} else if (strcmp(arg, "-c") == 0) {
 			const char *v = next_value();
 			if (!v || (options.cursor_scale = strtof(v, nullptr)) <= 0.0f) {

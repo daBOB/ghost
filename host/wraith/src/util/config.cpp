@@ -272,7 +272,7 @@ ConfigLoad load_config(const std::string &path) {
 
 	WraithConfig next;
 	Reader reader(&result);
-	reader.unknown_sections(root, {"log", "network", "encode", "refine", "files"});
+	reader.unknown_sections(root, {"log", "network", "encode", "refine", "files", "display"});
 
 	const toml::table *log = reader.section(root, "log", {"level"});
 	std::string level = level_name(next.log.level);
@@ -339,6 +339,9 @@ ConfigLoad load_config(const std::string &path) {
 	reader.boolean(files, "files", "shares", &next.files.shares);
 	reader.boolean(files, "files", "bookmarks", &next.files.bookmarks);
 
+	const toml::table *display = reader.section(root, "display", {"client_scale"});
+	reader.boolean(display, "display", "client_scale", &next.display.client_scale);
+
 	if (result.ok) {
 		g_config = next;
 	}
@@ -384,7 +387,9 @@ std::string describe_config(const WraithConfig &config) {
 		<< "send = " << flag(config.files.send) << "\n"
 		<< "directory = \"" << config.files.directory << "\"\n"
 		<< "shares = " << flag(config.files.shares) << "\n"
-		<< "bookmarks = " << flag(config.files.bookmarks) << "\n";
+		<< "bookmarks = " << flag(config.files.bookmarks) << "\n"
+		<< "\n[display]\n"
+		<< "client_scale = " << flag(config.display.client_scale) << "\n";
 	return out.str();
 }
 

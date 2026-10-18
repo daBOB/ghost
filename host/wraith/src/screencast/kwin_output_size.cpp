@@ -9,6 +9,7 @@
 #include <kde-output-management-v2-client-protocol.h>
 #include <wayland-client-core.h>
 
+#include <cmath>
 #include <memory>
 #include <unistd.h>
 #include <vector>
@@ -34,7 +35,7 @@ constexpr uint32_t kDefaultRefreshMilliHz = 60'000;
 // through wl_proxy_add_dispatcher instead of listeners: a listener has to
 // fill in every event of the bound version (kde_output_device_v2 has
 // fourteen at v1 alone), where only these few matter.
-enum : uint32_t { kDeviceCurrentMode = 1, kDeviceMode = 2, kDeviceDone = 3 };
+enum : uint32_t { kDeviceCurrentMode = 1, kDeviceMode = 2, kDeviceDone = 3, kDeviceScale = 4 };
 enum : uint32_t { kRegistryOutput = 1 };
 enum : uint32_t { kModeSize = 0, kModeRefresh = 1, kModeRemoved = 3 };
 enum : uint32_t { kConfigApplied = 0, kConfigFailed = 1, kConfigFailureReason = 2 };
@@ -53,6 +54,7 @@ struct Sizer {
 	struct kde_output_management_v2 *management = nullptr;
 	std::vector<std::unique_ptr<Mode>> modes;
 	Mode *current = nullptr;
+	double scale = 0.0; // the device's, from its scale event
 	bool device_done = false;
 	enum class Apply { Pending, Applied, Failed } apply_state = Apply::Pending;
 	std::string failure_reason;
@@ -132,6 +134,7 @@ struct Sizer {
 				}
 			}
 			break;
+		case kDeviceScale: self->scale = wl_fixed_to_double(args[0].f); break;
 		case kDeviceDone: self->device_done = true; break;
 		}
 		return 0;
@@ -193,7 +196,8 @@ std::string size_text(uint32_t width, uint32_t height) {
 
 } // namespace
 
-bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height, std::string *error) {
+bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height, double scale,
+	std::string *error) {
 	if (!client.has_global(kde_output_management_v2_interface.name)) {
 		*error = "kwin does not advertise kde_output_management_v2 to wraith -- check the desktop-file trust "
 				 "rule (packaging/desktop/wraith.desktop.in: X-KDE-Wayland-Interfaces= must list it)";
@@ -229,7 +233,8 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 		*error = "kwin sent no state for its output device";
 		return false;
 	}
-	if (s.current_is(width, height)) {
+	auto scale_off = [&] { return scale > 0.0 && std::fabs(s.scale - scale) > 0.001; };
+	if (s.current_is(width, height) && !scale_off()) {
 		return true;
 	}
 
@@ -243,7 +248,7 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 		return false;
 	}
 
-	Mode *target = s.find(width, height);
+	Mode *target = s.current_is(width, height) ? s.current : s.find(width, height);
 	if (!target) {
 		// set_custom_modes replaces the output's whole custom list, so the
 		// size from an earlier resize doesn't pile up beside this one.
@@ -279,6 +284,21 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 		*error = "kwin applied a " + size_text(width, height) + " mode but its output is still " +
 			(s.current ? size_text((uint32_t)s.current->width, (uint32_t)s.current->height) : "unknown");
 		return false;
+	}
+	// After the mode: kwin keeps a scale per output, not per mode, so the
+	// one a session left at another size would otherwise stay.
+	if (scale_off()) {
+		std::string what = "a " + std::to_string((int)std::lround(scale * 100.0)) + "% scale";
+		struct kde_output_configuration_v2 *cfg = kde_output_management_v2_create_configuration(s.management);
+		kde_output_configuration_v2_scale(cfg, s.device, wl_fixed_from_double(scale));
+		if (!s.apply(cfg, what, error) || !client.roundtrip()) {
+			return false;
+		}
+		if (scale_off()) {
+			*error = "kwin applied " + what + " but its output's is still " +
+				std::to_string((int)std::lround(s.scale * 100.0)) + "%";
+			return false;
+		}
 	}
 	return true;
 }

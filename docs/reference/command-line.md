@@ -100,6 +100,7 @@ prints this list with no arguments; the logic of each is in
 | `-K` | Kiosk: fullscreen for good, no minimize. The toolbar's close, the menu's Disconnect and End session still work. |
 | `-T` | Take over: if the user's session is attached to another client, disconnect that client and attach. Exit status 4 means a take-over was refused. |
 | `-r WxH` | Request this output resolution in `SessionHello`; the host's answer wins. |
+| `-s scale` | The remote desktop's scale, sent with `-r` and with every resolution change ([window size](../design/spectre-client.md#window-size)). `auto` (the default) is this desktop's own scale when the size asked for is this screen's in pixels, else 100%; a number (`1.5`) or percentage (`150%`), 50% to 400%, sets it whatever the size. spectre-qt's Remote desktop scale setting. |
 | `-A` | Make the remote resolution follow the window. |
 | `-V fit\|actual` | Picture scaled to the window, or 1:1 and panned. Default: whichever the menu last picked. |
 | `-c SCALE` | Extra cursor size multiplier (default 1). |

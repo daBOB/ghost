@@ -87,10 +87,13 @@ public:
 	// Sets the one DisplayDescriptor SessionHello.displays carries
 	// (gdp-spec.md §7.2), if any. Must be called before connect() --
 	// SessionHello is built and sent from within it. 0x0 (the default)
-	// omits displays entirely rather than sending a 0x0 entry.
-	void set_requested_display(uint32_t width, uint32_t height) {
+	// omits displays entirely rather than sending a 0x0 entry. `scale` is
+	// the desktop scale wanted (StreamSession::requested_scale()); 0 sends
+	// none, which wraith takes as 100%.
+	void set_requested_display(uint32_t width, uint32_t height, double scale) {
 		requested_width_ = width;
 		requested_height_ = height;
+		requested_scale_ = scale;
 	}
 
 	// SessionHello.codecs: the gdp/video_codec.hpp tokens this client can
@@ -298,10 +301,10 @@ public:
 	// completion is on_disconnected with wraith's SESSION_ENDED close code.
 	// No-op before SessionAccept.
 	void send_logout_request();
-	// Asks wraith to change the output to width x height mid-session
-	// (gdp-spec.md §7.2); on_displays_changed answers. No-op before
-	// SessionAccept.
-	void send_resolution_change(uint32_t width, uint32_t height);
+	// Asks wraith to change the output to width x height, at `scale` (0:
+	// none) mid-session (gdp-spec.md §7.2); on_displays_changed answers.
+	// No-op before SessionAccept.
+	void send_resolution_change(uint32_t width, uint32_t height, double scale);
 	// Asks wraith to stop or resume building the lossless layer
 	// (gdp-spec.md §7.8: RefinePause), the menu's Lossless row. The caller only
 	// sends it on a session that negotiated "refine". No-op before
@@ -416,6 +419,7 @@ private:
 	bool file_share_enabled_ = false;
 	uint32_t requested_width_ = 0;
 	uint32_t requested_height_ = 0;
+	double requested_scale_ = 0.0;
 	gdp::Stream *control_ = nullptr;
 	gdp::Stream *input_ = nullptr;
 	gdp::FrameReader control_reader_;

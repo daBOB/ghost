@@ -111,6 +111,12 @@ struct StreamOptions {
 	// SessionAccept reports is what the window and decoder use either way.
 	uint32_t requested_width = 0;
 	uint32_t requested_height = 0;
+	// The remote desktop's scale (spectre -s, DisplayDescriptor.scale).
+	// Unset ("auto", the default): this desktop's own scale when the size
+	// asked for is this screen's in pixels -- the remote desktop is then a
+	// copy of this screen, its UI the size of this one's -- else none,
+	// which the host takes as 100% (requested_scale()).
+	std::optional<double> scale;
 	// Follow the window (spectre -A, off by default): when the window's
 	// video area settles at a new pixel size, ask the host for that size
 	// (ResolutionChange, gdp-spec.md §7.2). Off, the remote resolution only
@@ -235,8 +241,13 @@ private:
 	// window keeps its size; the picture scales.
 	void on_displays_changed(const DisplayInfo &display);
 	// The local screen under the window, in pixels (0x0 if unknown): the
-	// menu's "Match this display" choice.
+	// menu's "Match this display" choice. Before the window opens, the
+	// primary display.
 	void screen_pixel_size(uint32_t *width, uint32_t *height) const;
+	// DisplayDescriptor.scale for a request of width x height: spectre -s
+	// if given, else this desktop's scale when that is the screen's size in
+	// pixels, else 0 (none: the host's 100%).
+	double requested_scale(uint32_t width, uint32_t height) const;
 	// -A. schedule_follow_window(), on a window size event: arms the settle
 	// timer, or -- in the moment after snap_window() or the window first
 	// appearing -- takes the new video area as the baseline instead (those
@@ -490,6 +501,9 @@ private:
 	MicrophoneCapture microphone_;
 
 	bool sdl_initialized_ = false;
+	// SDL's video subsystem was brought up before connecting, for the
+	// screen's size and scale in SessionHello (connect_and_wait_for_accept()).
+	bool sdl_video_early_ = false;
 	SDL_Window *window_ = nullptr;
 	// Set once open_window() has the presenter and decoder up. Until then
 	// the network callbacks have nowhere to deliver: video frames are

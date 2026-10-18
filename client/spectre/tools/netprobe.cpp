@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
 	spectre::SessionClient client;
 	client.set_decodable_codecs({codec});
 	client.set_network_profile(profile);
-	client.set_requested_display(width, height);
+	client.set_requested_display(width, height, 0.0);
 	client.set_lossless_refinement(refine);
 	client.set_file_transfer(false); // nothing here would send or fetch one
 

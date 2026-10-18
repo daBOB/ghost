@@ -37,6 +37,9 @@ QStringList SpectreSettings::to_args(const QScreen *screen, bool debug) const {
 	} else {
 		args << "-r" << resolution;
 	}
+	if (!scale.isEmpty() && scale != QLatin1String("auto")) {
+		args << "-s" << scale;
+	}
 	if (!preferred_codec.isEmpty()) {
 		args << "-C" << preferred_codec;
 	}

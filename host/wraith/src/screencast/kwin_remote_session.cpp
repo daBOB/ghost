@@ -199,7 +199,7 @@ bool KwinRemoteSession::open(const Config &config) {
 	// Before stream_output: the stream is negotiated at the output's size
 	// at that moment, and PipeWireCapture offers exactly config's.
 	std::string size_error;
-	if (!set_kwin_output_size(impl_->client, config.width, config.height, &size_error)) {
+	if (!set_kwin_output_size(impl_->client, config.width, config.height, config.scale, &size_error)) {
 		// Retried every tick like everything else here; said once at ERROR.
 		if (!impl_->size_warned) {
 			impl_->size_warned = true;

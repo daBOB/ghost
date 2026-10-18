@@ -77,6 +77,12 @@ struct SpectreSettings {
 	// SessionAccept's negotiated size is whatever the session actually ends
 	// up at.
 	QString resolution;
+	// spectre -s: the remote desktop's scale. "auto" (the default) passes
+	// nothing, and spectre sends this desktop's own scale when the stream
+	// is this screen's size in pixels -- the remote desktop a copy of this
+	// screen -- and 100% otherwise. A number ("1", "1.5", "2") is sent as
+	// is, whatever the size.
+	QString scale = QStringLiteral("auto");
 	// spectre -A: ask the host for the window's size whenever it settles
 	// at a new one. Off by default -- the picture scales to the window,
 	// and the session menu changes the resolution.

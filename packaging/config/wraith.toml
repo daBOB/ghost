@@ -159,3 +159,11 @@
 # A sidebar entry in Nautilus and Dolphin for each shared folder, removed
 # when the session ends.
 #bookmarks = true
+
+[display]
+# The desktop's output scale follows the client: its own scale when it
+# streams its whole screen at native resolution, 100% otherwise, or
+# whatever the user picked in spectre-qt's settings (spectre -s). Applied
+# with the output size, on KDE and wlroots desktops; GNOME keeps its own.
+# false leaves the scale to the desktop's display settings.
+#client_scale = true

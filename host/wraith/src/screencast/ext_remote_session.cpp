@@ -152,7 +152,8 @@ struct ExtRemoteSession::Impl {
 	}
 
 	// Best-effort: resizes the compositor's first output to config.width x
-	// config.height via zwlr_output_manager_v1 (wlr-output-management-
+	// config.height, at config.scale unless that is 0, via
+	// zwlr_output_manager_v1 (wlr-output-management-
 	// unstable-v1), the same mechanism wayvnc uses to size a wlroots
 	// headless/virtual output to match a connecting client. No-op if the
 	// compositor doesn't export the protocol, or advertises no heads --
@@ -188,6 +189,9 @@ struct ExtRemoteSession::Impl {
 			zwlr_output_configuration_v1_enable_head(cfg, pending_head);
 		zwlr_output_configuration_head_v1_set_custom_mode(cfg_head, (int32_t)config.width,
 			(int32_t)config.height, 0);
+		if (config.scale > 0.0) {
+			zwlr_output_configuration_head_v1_set_scale(cfg_head, wl_fixed_from_double(config.scale));
+		}
 		static const struct zwlr_output_configuration_v1_listener config_listener = {
 			.succeeded = Impl::on_config_succeeded,
 			.failed = Impl::on_config_failed,

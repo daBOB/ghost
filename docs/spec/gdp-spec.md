@@ -778,9 +778,18 @@ is taken as empty.
 | 4 | `scale` | double | Output scale factor; 0 or 1 for none. |
 
 A session in this version has one output. A host acts on the first
-`displays` entry only, and only on its width and height, applying the
-same rules as `ResolutionChange` (§7.2); `SessionAccept.outputs` reports
-the size it actually has. A request the host cannot meet is not an error.
+`displays` entry only, and only on its width, height and scale, applying
+the same rules as `ResolutionChange` (§7.2); `SessionAccept.outputs`
+reports the size it actually has. A request the host cannot meet is not
+an error.
+
+From a client, `scale` is the scale it wants the host's desktop to run
+the output at: the reference client sends its own desktop's scale when
+the size it asks for is its screen's in pixels, and none otherwise. A
+host that sets its desktop's scale applies it with the size, and takes 0
+as 1 (100%), so that a scale one client asked for does not outlast it. A
+host MAY round it, bound it, or leave its desktop's scale alone, and
+reports in `OutputDescriptor.display.scale` the scale it set, or 1.
 
 ### 6.3 Before authentication
 
@@ -1082,7 +1091,7 @@ output:
 | # | Field | Type | Meaning |
 |---|---|---|---|
 | 1 | `stream_id` | uint32 | The output. |
-| 2 | `display` | `DisplayDescriptor` | The size wanted (width and height; the rest is ignored). |
+| 2 | `display` | `DisplayDescriptor` | The size wanted (width and height) and the scale (§6.2); `refresh_mhz` is ignored. |
 
 The host MUST answer every `ResolutionChange` with a `DisplaysChanged`
 carrying the outputs as they are afterwards, whether it changed the size

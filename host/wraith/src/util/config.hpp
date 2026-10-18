@@ -152,6 +152,14 @@ struct WraithConfig {
 		// Give each shared folder a sidebar entry in Nautilus and Dolphin.
 		bool bookmarks = true;
 	} files;
+
+	struct Display {
+		// Set the desktop's output scale from the client's
+		// DisplayDescriptor.scale, 100% when it sends none, on KDE and
+		// wlroots desktops. false leaves the scale to the desktop's own
+		// settings.
+		bool client_scale = true;
+	} display;
 };
 
 // The settings in effect: the defaults until a load_config() succeeds.

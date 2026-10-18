@@ -252,6 +252,19 @@ area resets as the window first settles, after spectre's own snaps and
 after a menu pick, so a resolution picked at launch or from the menu
 stands until the user resizes the window. Off by default.
 
+Every size spectre asks for (`SessionHello`, `ResolutionChange`) carries
+the remote desktop's scale too, `DisplayDescriptor.scale`. By default
+(`-s auto`) it is this desktop's own scale when the size is this screen's
+in pixels, "Match this display", so the remote desktop is a copy of this
+screen with its UI the size of this one's; any other size sends none,
+which the host takes as 100%. A 1080p window or a 1080p stream on a 4K
+screen thus gets a 100% desktop, not one at the 200% a 4K session left
+behind. The rule depends only on the size, never on fullscreen, so
+toggling fullscreen doesn't rescale the remote desktop. `-s 1.5` (or
+spectre-qt's Remote desktop scale) sends that value whatever the size.
+Before the window exists the screen and scale are the primary display's,
+which is why spectre starts SDL's video subsystem before connecting.
+
 The actual-size view (`-V actual`) draws the picture 1:1, centred when
 smaller than the window. A bigger one hangs off the edges and pans: with
 the pointer in a band about 24 px wide inside an overhanging edge the

@@ -64,7 +64,8 @@ void test_values_apply() {
 		"[encode]\ngop = 0\nmax_bitrate_mbps = 45\nforce_software = true\nnvenc_zero_copy = false\n"
 		"bit_depth = 8\npyrowave_bpp = 0.75\n"
 		"[encode.codecs]\nav1 = true\nh264 = false\npyrowave = true\n"
-		"[refine]\nburst_ms = 200\nsettle_ms = 120\n"));
+		"[refine]\nburst_ms = 200\nsettle_ms = 120\n"
+		"[display]\nclient_scale = false\n"));
 	CHECK(load.ok);
 	const wraith::WraithConfig &c = wraith::config();
 	CHECK(c.log.level == wraith::LogLevel::Debug);
@@ -73,6 +74,7 @@ void test_values_apply() {
 	CHECK(c.network.pacing_multiplier == 4);
 	CHECK(c.network.pacing_floor_mbps == 900);
 	CHECK(c.refine.burst_ms == 200);
+	CHECK(!c.display.client_scale);
 	CHECK(c.refine.settle_ms == 120);
 	CHECK(c.refine.bandwidth_percent == 50); // untouched keys keep their default
 	CHECK(c.encode.gop == 0);

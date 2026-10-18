@@ -108,6 +108,31 @@ void wait_for_notify(int fd, int timeout_ms, std::initializer_list<int> others =
 }
 #endif
 
+// Before SDL_INIT_VIDEO, which reads some of them (the Wayland app-id).
+void set_sdl_hints() {
+	// Matches the "spectre-qt" desktop entry (packaging/desktop/spectre-qt.desktop.in)
+	// so Wayland compositors/taskbars -- which resolve a window's icon by
+	// app-id rather than accepting one at runtime -- show the same icon for
+	// this streaming window as for the launcher. SDL_SetWindowIcon() in
+	// open_window() covers X11/Windows, where SDL can set one directly.
+	SDL_SetHint(SDL_HINT_APP_ID, "spectre-qt");
+	// Fullscreen grabs the keyboard (apply_keyboard_grab()), and then
+	// Alt+Tab is the remote desktop's too: SDL would otherwise keep
+	// handling it locally so a fullscreen app can't trap the user, but
+	// spectre has its own ways out (Ctrl+Shift+F11, the menu, the
+	// toolbar).
+	SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");
+	// SDL swallows the click that focuses an unfocused window (X11,
+	// Windows, macOS) unless told otherwise; pass it through, so the
+	// focusing click reaches the remote desktop.
+	SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
+	// SDL keeps the screen awake for as long as a window is open. A remote
+	// desktop nobody is touching is as idle as a local one, so the local
+	// screensaver and display sleep go ahead -- except after gamepad input
+	// (note_gamepad_activity()), which the local desktop never sees.
+	SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
+}
+
 // Linux input-event-codes.h BTN_* values (session.proto's PointerButton
 // wire representation) for SDL3's 1-based mouse button index.
 uint32_t sdl_button_to_btn_code(Uint8 sdl_button) {
@@ -198,7 +223,7 @@ StreamSession::~StreamSession() {
 	if (window_) {
 		SDL_DestroyWindow(window_);
 	}
-	if (sdl_initialized_) {
+	if (sdl_initialized_ || sdl_video_early_) {
 		SDL_Quit();
 	}
 }
@@ -351,7 +376,13 @@ std::string StreamSession::diagnostics_text() const {
 }
 
 bool StreamSession::connect_and_wait_for_accept() {
-	client_.set_requested_display(options_.requested_width, options_.requested_height);
+	set_sdl_hints();
+	// Video now rather than in open_window(), for the screen's size and
+	// scale that SessionHello's display carries (requested_scale()). Without
+	// it there is no scale to send, and open_window() reports the failure.
+	sdl_video_early_ = SDL_InitSubSystem(SDL_INIT_VIDEO);
+	client_.set_requested_display(options_.requested_width, options_.requested_height,
+		options_.requested_width ? requested_scale(options_.requested_width, options_.requested_height) : 0.0);
 	DecodableCodecs offer = offerable_codecs();
 	offered_codecs_ = offer.codecs;
 	offered_ten_bit_ = offer.ten_bit;
@@ -396,28 +427,6 @@ bool StreamSession::connect_and_wait_for_accept() {
 }
 
 bool StreamSession::open_window() {
-	// Matches the "spectre-qt" desktop entry (packaging/desktop/spectre-qt.desktop.in)
-	// so Wayland compositors/taskbars -- which resolve a window's icon by
-	// app-id rather than accepting one at runtime -- show the same icon for
-	// this streaming window as for the launcher. SDL_SetWindowIcon() below
-	// covers X11/Windows, where SDL can set one directly.
-	SDL_SetHint(SDL_HINT_APP_ID, "spectre-qt");
-	// Fullscreen grabs the keyboard (apply_keyboard_grab()), and then
-	// Alt+Tab is the remote desktop's too: SDL would otherwise keep
-	// handling it locally so a fullscreen app can't trap the user, but
-	// spectre has its own ways out (Ctrl+Shift+F11, the menu, the
-	// toolbar).
-	SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");
-	// SDL swallows the click that focuses an unfocused window (X11,
-	// Windows, macOS) unless told otherwise; pass it through, so the
-	// focusing click reaches the remote desktop.
-	SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
-	// SDL keeps the screen awake for as long as a window is open. A remote
-	// desktop nobody is touching is as idle as a local one, so the local
-	// screensaver and display sleep go ahead -- except after gamepad input
-	// (note_gamepad_activity()), which the local desktop never sees.
-	SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
-
 	// SDL_INIT_GAMEPAD whether or not the session negotiated "gamepad"
 	// (no spectre -G, or a host that can't create devices): the subsystem is
 	// cheap, and handle_gamepad_added() is where the capability check
@@ -785,7 +794,7 @@ void StreamSession::request_resolution(uint32_t width, uint32_t height, bool fro
 	request_from_menu_ = from_menu;
 	SLOG_INFO("spectre: asking the host for %ux%u%s", width, height,
 		from_menu ? "" : " (following the window)");
-	client_.send_resolution_change(width, height);
+	client_.send_resolution_change(width, height, requested_scale(width, height));
 }
 
 void StreamSession::schedule_follow_window() {
@@ -843,7 +852,7 @@ void StreamSession::follow_window() {
 
 void StreamSession::screen_pixel_size(uint32_t *width, uint32_t *height) const {
 	*width = *height = 0;
-	SDL_DisplayID id = window_ ? SDL_GetDisplayForWindow(window_) : 0;
+	SDL_DisplayID id = window_ ? SDL_GetDisplayForWindow(window_) : SDL_GetPrimaryDisplay();
 	const SDL_DisplayMode *mode = id ? SDL_GetCurrentDisplayMode(id) : nullptr;
 	if (!mode) {
 		return;
@@ -856,6 +865,29 @@ void StreamSession::screen_pixel_size(uint32_t *width, uint32_t *height) const {
 	// The host needs even sizes for 4:2:0 video.
 	*width = w & ~1u;
 	*height = h & ~1u;
+}
+
+double StreamSession::requested_scale(uint32_t width, uint32_t height) const {
+	if (options_.scale) {
+		return *options_.scale;
+	}
+	uint32_t screen_w = 0, screen_h = 0;
+	screen_pixel_size(&screen_w, &screen_h);
+	if (screen_w == 0 || (width & ~1u) != screen_w || (height & ~1u) != screen_h) {
+		return 0.0;
+	}
+	// The window's display scale once there is a window; before it, the
+	// same thing from the display: pixel density (Wayland, macOS) times
+	// content scale (Windows' DPI scaling).
+	float scale = 0.0f;
+	if (window_) {
+		scale = SDL_GetWindowDisplayScale(window_);
+	} else if (SDL_DisplayID id = SDL_GetPrimaryDisplay()) {
+		const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(id);
+		float density = mode && mode->pixel_density > 0.0f ? mode->pixel_density : 1.0f;
+		scale = density * SDL_GetDisplayContentScale(id);
+	}
+	return scale > 0.0f ? (double)scale : 0.0;
 }
 
 void StreamSession::on_disconnected(const std::string &reason) {

@@ -291,6 +291,9 @@ void SessionClient::on_connected() {
 		auto *display = hello->add_displays();
 		display->set_width(requested_width_);
 		display->set_height(requested_height_);
+		if (requested_scale_ > 0.0) {
+			display->set_scale(requested_scale_);
+		}
 	}
 	send_control(hello_env);
 
@@ -906,7 +909,7 @@ void SessionClient::send_logout_request() {
 	send_control(env);
 }
 
-void SessionClient::send_resolution_change(uint32_t width, uint32_t height) {
+void SessionClient::send_resolution_change(uint32_t width, uint32_t height, double scale) {
 	if (!control_ || !accepted_) {
 		return;
 	}
@@ -915,6 +918,9 @@ void SessionClient::send_resolution_change(uint32_t width, uint32_t height) {
 	change->set_stream_id(0); // the one video stream (SessionAccept.outputs)
 	change->mutable_display()->set_width(width);
 	change->mutable_display()->set_height(height);
+	if (scale > 0.0) {
+		change->mutable_display()->set_scale(scale);
+	}
 	send_control(env);
 }
 
