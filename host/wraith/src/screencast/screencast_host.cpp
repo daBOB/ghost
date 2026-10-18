@@ -459,11 +459,17 @@ void ScreencastHost::drop_tile_source() {
 
 std::vector<uint64_t> ScreencastHost::capture_modifiers() {
 	std::vector<uint64_t> encoder_mods = session_->supported_import_modifiers(DRM_FORMAT_XRGB8888);
-	if (!session_->wants_cpu_frame()) {
+	// The format is fixed for the capture's life, but refinement can be
+	// switched on and off under it: a refining session may read frames back
+	// later even while it is paused now.
+	bool may_read_back = session_->wants_cpu_frame() || session_->refines() || encoder_mods.empty();
+	if (!may_read_back) {
 		return encoder_mods;
 	}
 	if (!ensure_reader()) {
-		return {}; // memfd frames, read back by the compositor
+		// Nothing here can read a dmabuf back: memfd frames, read back by
+		// the compositor, for an encoder that wants pixels now.
+		return session_->wants_cpu_frame() ? std::vector<uint64_t>{} : encoder_mods;
 	}
 	std::vector<uint64_t> reader_mods = reader_->supported_modifiers(DRM_FORMAT_XRGB8888);
 	if (encoder_mods.empty()) {

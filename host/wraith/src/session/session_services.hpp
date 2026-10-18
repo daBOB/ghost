@@ -145,6 +145,9 @@ public:
 	// per frame: refinement pausing turns it off) -- for a capture that
 	// gets dmabufs and can read them back (screencast/dmabuf_reader.hpp).
 	bool wants_cpu_frame() const { return encoder_ && encoder_->wants_cpu_frame(); }
+	// Whether the session runs lossless refinement, paused or not: its
+	// encoder may want CPU pixels later even when it doesn't now.
+	bool refines() const { return session_refine_; }
 	// Whether it would rather have the dmabuf and a GPU TileSource
 	// (push_tiled()); asked first, per frame, by a host that has one.
 	bool wants_tiled_dmabuf() const { return encoder_ && encoder_->takes_tiled_dmabuf(); }

@@ -176,8 +176,10 @@ private:
 	bool reader_tried_ = false;
 	bool ensure_reader();
 	// The modifiers to offer the compositor: the encoder's own (zero-copy
-	// import), or, for an encoder that wants CPU pixels, ones the reader
-	// can import -- empty (memfd frames) when there is no reader.
+	// import), or, for an encoder that wants CPU pixels now or may later
+	// (a refining session, paused or not) or imports none, ones the reader
+	// can import too -- empty (memfd frames) when there is no reader for an
+	// encoder that wants pixels now.
 	std::vector<uint64_t> capture_modifiers();
 	// Refinement over a hardware encoder hashes on the GPU through this
 	// (SessionServices::push_tiled()) and the frame stays a dmabuf. Made

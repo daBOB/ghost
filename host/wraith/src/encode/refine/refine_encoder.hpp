@@ -73,6 +73,12 @@ public:
 	bool takes_tiled_dmabuf() const override;
 	// push() and push_tiled() hand the frame to the base as it is.
 	bool can_import(const DmabufFrame &frame) const override { return base_->can_import(frame); }
+	// The base's: paused, its frames go to the base as dmabufs (push()), so
+	// a capture opened then must offer what the base imports, or it gets
+	// memfd frames for the rest of its life.
+	std::vector<uint64_t> supported_import_modifiers(uint32_t drm_format) const override {
+		return base_->supported_import_modifiers(drm_format);
+	}
 	bool push_tiled(const DmabufFrame &frame, TileSource &tiles, int64_t pts_us,
 		const DamageRegion *damage) override;
 	void request_keyframe() override;
