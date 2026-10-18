@@ -77,6 +77,10 @@ pub fn router(state: WebState) -> Router {
         .route("/admin/thin-clients/{mac}", get(thin_clients::detail).post(thin_clients::rename))
         .route("/admin/thin-clients/{mac}/remove", post(thin_clients::remove))
         .route("/admin/thin-clients/{mac}/action", post(thin_clients::act))
+        .route(
+            "/admin/thin-clients/{mac}/settings",
+            get(thin_clients::client_settings).post(thin_clients::save_client_settings),
+        )
         .route("/admin/audit", get(audit))
         .route("/admin/events", get(events))
         .route("/admin/static/{file}", get(static_file))

@@ -16,6 +16,8 @@ add_executable(wisp-greeter
   src/main.cpp
   src/agent_files.cpp
   src/agent_files.h
+  src/audio_output.cpp
+  src/audio_output.h
   src/boot_config.cpp
   src/boot_config.h
   src/display_sleep.cpp

@@ -70,8 +70,8 @@ button, .button { background: var(--accent); color: var(--accent-text); border: 
 .button:hover { text-decoration: none; filter: brightness(1.05); }
 button.link { background: none; color: var(--accent); padding: 0; font-weight: normal; }
 button.danger { background: var(--bad); color: #fff; }
-button.secondary { background: var(--badge); color: var(--text); border: 1px solid var(--line); }
-button.secondary:hover { filter: brightness(.97); }
+button.secondary, .button.secondary { background: var(--badge); color: var(--text); border: 1px solid var(--line); }
+button.secondary:hover, .button.secondary:hover { filter: brightness(.97); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 form.grid { display: grid; gap: 14px; max-width: 520px; }
 form.grid label { display: grid; gap: 4px; }

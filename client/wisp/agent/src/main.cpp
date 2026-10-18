@@ -122,7 +122,8 @@ std::string profile_json(const gdp::wisp::ClientProfile &p) {
 		<< "  \"forward_gamepads\": " << b(p.forward_gamepads()) << ",\n"
 		<< "  \"microphone\": " << b(p.microphone()) << ",\n"
 		<< "  \"debug_logging\": " << b(p.debug_logging()) << ",\n"
-		<< "  \"display_sleep_minutes\": " << p.display_sleep_minutes() << "\n"
+		<< "  \"display_sleep_minutes\": " << p.display_sleep_minutes() << ",\n"
+		<< "  \"audio_output\": " << json_string(p.audio_output()) << "\n"
 		<< "}\n";
 	return out.str();
 }
@@ -461,7 +462,7 @@ void Agent::write_profile(const gdp::wisp::ClientProfile &profile) {
 		log("can't write %s: %s", profile_path_.c_str(), strerror(errno));
 		return;
 	}
-	log("profile updated; spectre uses it from its next launch, display sleep at once");
+	log("profile updated; spectre uses it from its next launch, display sleep and audio output at once");
 }
 
 std::string default_spectre_path(const char *argv0) {

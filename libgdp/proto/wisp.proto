@@ -70,9 +70,10 @@ message WispWelcome {
   ClientProfile profile = 1;
 }
 
-// Veil -> client, whenever an administrator saves a new profile. Its
-// spectre settings apply at the next spectre launch, never to a running
-// one; display_sleep_minutes at once.
+// Veil -> client, whenever an administrator saves the defaults or this
+// client's own settings: the defaults with this client's overrides applied.
+// Its spectre settings apply at the next spectre launch, never to a
+// running one; display_sleep_minutes and audio_output at once.
 message WispProfile {
   ClientProfile profile = 1;
 }
@@ -126,4 +127,8 @@ message ClientProfile {
   // without keyboard, mouse or gamepad input, in a session or not.
   // 0: never.
   uint32 display_sleep_minutes = 11;
+  // Where sound plays: "display" (the monitor's HDMI/DisplayPort audio,
+  // kept while the display sleeps), "builtin" (the speaker or audio jack)
+  // or "auto" (WirePlumber's own choice).
+  string audio_output = 12;
 }

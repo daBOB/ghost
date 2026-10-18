@@ -9,6 +9,7 @@
 // which wisp-agent leaves in /run/wisp/profile.json.
 // spectre-qt's sister: same libgdp lobby client and the same child-process
 // model, none of its desktop-launcher parts (host history, settings, TOFU).
+#include "audio_output.h"
 #include "boot_config.h"
 #include "display_sleep.h"
 #include "greeter_window.h"
@@ -38,6 +39,7 @@ int main(int argc, char *argv[]) {
 	parser.process(app);
 
 	DisplaySleep display_sleep(parser.value(run_dir_option));
+	AudioOutput audio_output(parser.value(run_dir_option));
 	GreeterWindow window(BootConfig::load(parser.value(veil_option), parser.value(cert_option)),
 		parser.value(run_dir_option));
 	if (parser.isSet(window_option)) {

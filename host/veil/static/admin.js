@@ -4,7 +4,8 @@
 // The admin UI's only script besides htmx, kept out of the pages so the
 // Content-Security-Policy can forbid inline script.
 document.addEventListener("submit", (e) => {
-  const message = e.target.dataset && e.target.dataset.confirm;
+  // The form's, or the button's that submitted it (one of several).
+  const message = (e.submitter && e.submitter.dataset.confirm) || (e.target.dataset && e.target.dataset.confirm);
   if (message && !confirm(message)) {
     e.preventDefault();
   }

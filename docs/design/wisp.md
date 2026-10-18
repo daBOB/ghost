@@ -58,16 +58,27 @@ reach the boot network: anyone who can boot the image can read it.
 veild keeps live connections by MAC (a newer one replaces an older one)
 with their sessions in memory, and `thin_clients (mac, name, first_seen,
 last_seen, last_report)` in the database, so offline clients stay listed
-under their admin-given names. The profile is one JSON row in `settings`
-(`thin_client_profile`), defaulting to SpectreSettings' defaults, held in
-a `watch` channel every connection's push task follows.
+under their admin-given names. The default profile is one JSON row in
+`settings` (`thin_client_profile`), defaulting to SpectreSettings'
+defaults, held in a `watch` channel every connection's push task follows.
+A client's own settings are a JSON object of just the fields it
+overrides, in `thin_client_settings (mac, overrides)`, which goes with the
+client's row when it is removed. Every client is sent its effective
+profile: the defaults with its overrides in place, so a field it doesn't
+override follows the defaults as they change, and the client never knows
+which is which. Its push task wakes on either changing and sends nothing if
+the result is what it last sent.
 
 Admin UI: Thin Clients lists every client (name or hostname, status,
 address, MAC, current user and host, uptime, last seen; refreshed live);
-a client's page shows its report and session, edits its name, and
-removes it while offline; Settings edits the profile, laid out like
-spectre-qt's dialog minus what a kiosk makes moot. Renames, removals and
-profile changes write `audit` rows, the last naming each field changed.
+a client's page shows its report and session and the settings it sets
+itself, edits its name, and removes it while offline; its Settings page
+offers every field with a "Default (…)" choice first, and puts them all
+back to the defaults at once. Default settings edits the defaults, laid out
+like spectre-qt's dialog minus what a kiosk makes moot. Both pages render
+from one list of fields (`web/thin_clients.rs`'s `sections()`). Renames,
+removals and settings changes write `audit` rows, the last naming each
+field changed.
 
 ## On the client
 
@@ -88,6 +99,24 @@ own, `display_sleep_minutes` (default 20, 0 never), applies at once: the
 greeter runs `swayidle` with `wlopm --off`/`--on` under labwc. spectre
 lets the screen sleep during a session, except for a minute after
 gamepad input, which the compositor never sees.
+
+So does `audio_output`: `display` (the default), `builtin` or `auto`.
+On an HDA card (PipeWire's ACP) the speaker or jack and each HDMI port are
+mutually exclusive card profiles, and WirePlumber ranks analog above HDMI,
+so on its own it plays to the built-in speaker even with a TV on HDMI. The
+image adds a WirePlumber profile hook (`wireplumber/scripts/wisp/audio-output.lua`)
+that picks by the `wisp.audio-output` setting, and the greeter sets that
+with `wpctl settings --save` whenever the profile changes; the hook picks
+again for every card when it does, so a change applies to a running
+session's audio too. `display` takes the best available HDMI/DP profile.
+While the display sleeps, the GPU withdraws the monitor's audio (its
+ELD) and every HDMI profile reads as unavailable; the hook keeps the
+current one rather than letting WirePlumber move to the speaker (where it
+would stay after the display woke). spectre's stream is unlinked meanwhile,
+and relinked on waking. `builtin` takes the best profile that isn't HDMI;
+`auto` leaves it to WirePlumber. A UCM card, whose one HiFi profile carries
+every output at once, is left to WirePlumber's own choice of default
+sink.
 
 A monitor whose current mode is 3840 or more pixels wide runs at 200%
 (`wisp-session`, which labwc starts in place of the greeter, sets it

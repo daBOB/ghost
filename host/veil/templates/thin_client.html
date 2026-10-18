@@ -66,6 +66,18 @@
 </section>
 
 <section>
+  <h2>Settings</h2>
+  {% if own_settings.is_empty() %}<p class="muted">Uses the <a href="/admin/thin-clients/settings">default settings</a>.</p>
+  {% else %}
+  <p class="muted">Its own, in place of the <a href="/admin/thin-clients/settings">defaults</a>:</p>
+  <dl class="facts">
+    {% for (label, value) in own_settings %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}
+  </dl>
+  {% endif %}
+  <div class="actions"><a class="button secondary" href="/admin/thin-clients/{{ c.mac }}/settings">Edit settings</a></div>
+</section>
+
+<section>
   <h2>Name</h2>
   <form method="post" action="/admin/thin-clients/{{ c.mac }}" class="row">
     <input type="hidden" name="csrf" value="{{ nav.csrf }}">
@@ -78,7 +90,7 @@
 {% if !c.online %}
 <section class="danger">
   <h2>Remove</h2>
-  <p class="muted">Forgets this client and its name. It comes back, unnamed, the next time it boots.</p>
+  <p class="muted">Forgets this client, its name and its own settings. It comes back, unnamed and on the defaults, the next time it boots.</p>
   <form method="post" action="/admin/thin-clients/{{ c.mac }}/remove" data-confirm="Remove {{ c.name }}?">
     <input type="hidden" name="csrf" value="{{ nav.csrf }}">
     <button type="submit" class="danger">Remove thin client</button>

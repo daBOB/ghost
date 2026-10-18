@@ -152,6 +152,8 @@ RUN case "$TARGETARCH" in \
 # PipeWire in the wisp user's session gives the client a volume (spectre's
 # kiosk menu, through wpctl) even on HDMI outputs without a hardware mixer;
 # pipewire-alsa routes ALSA's default device, which SDL plays to, through it.
+# WirePlumber's profile hook from rootfs/usr/share/wireplumber picks the
+# output the Veil profile's audio_output names (docs/design/wisp.md).
 # swayidle and wlopm turn the display off after the profile's idle time
 # (the greeter's display_sleep.cpp). wlr-randr sets a 4K-class output's
 # scale (wisp-session).

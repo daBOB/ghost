@@ -5,9 +5,10 @@
 // Every Wisp client's wisp-agent keeps one connection to Veil's lobby port
 // (ALPN `wisp/1`) while it is up: a WispHello with the boot server's shared
 // key and the client's report, then session changes as they happen. Veil
-// answers with the spectre profile every client applies, pushes a new one
-// whenever an administrator saves it, and passes on an administrator's log
-// out, restart or shut down. The connection is the client's
+// answers with the profile the client applies -- the defaults, with any of
+// the client's own settings in their place -- pushes a new one whenever an
+// administrator saves either, and passes on an administrator's log out,
+// restart or shut down. The connection is the client's
 // online state; the database keeps the last report, so offline clients
 // stay listed with their names.
 use std::collections::HashMap;
@@ -26,7 +27,7 @@ use ipc::wisp::{
 use preauth::{Offense, StartupSlot};
 use quinn::VarInt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Notify};
 use tokio::time::{timeout_at, Instant};
 use tracing::{debug, info, warn};
 
@@ -38,10 +39,11 @@ const MAX_FRAME: u32 = 16 * 1024;
 // The settings row the profile lives in.
 const PROFILE_KEY: &str = "thin_client_profile";
 
-/// The settings every thin client applies: spectre's, at its next spectre
+/// The settings a thin client applies: spectre's, at its next spectre
 /// launch (SpectreSettings, client/spectre-settings/spectre_settings.h,
-/// minus what Wisp always does), and the client's own, at once. Stored as
-/// JSON in `settings`.
+/// minus what Wisp always does), and the client's own, at once. The
+/// defaults are stored as JSON in `settings`; a client's own settings
+/// override some of their fields (Overrides).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
@@ -67,7 +69,13 @@ pub struct Profile {
     /// Turn the display off after this many minutes without input; 0:
     /// never.
     pub display_sleep_minutes: u32,
+    /// "display", "builtin" or "auto" (AUDIO_OUTPUTS).
+    pub audio_output: String,
 }
+
+/// The Profile fields one client sets for itself, by their JSON names; the
+/// rest are the defaults'.
+pub type Overrides = serde_json::Map<String, serde_json::Value>;
 
 /// SpectreSettings' own defaults.
 impl Default for Profile {
@@ -84,6 +92,7 @@ impl Default for Profile {
             microphone: false,
             debug_logging: false,
             display_sleep_minutes: 20,
+            audio_output: "display".into(),
         }
     }
 }
@@ -93,6 +102,9 @@ pub const DECODERS: &[&str] = &["vulkan", "native", "software"];
 /// gdp::all_video_codec_tokens() (libgdp/src/video_codec.cpp), and auto.
 pub const CODECS: &[&str] = &["", "pyrowave", "av1", "h265", "h264"];
 pub const NETWORK_PROFILES: &[&str] = &["auto", "lan", "internet", "mobile"];
+/// The monitor's HDMI/DisplayPort audio, the speaker or audio jack, or
+/// WirePlumber's own choice (client/wisp/image's wisp/audio-output.lua).
+pub const AUDIO_OUTPUTS: &[&str] = &["display", "builtin", "auto"];
 
 impl Profile {
     pub fn validate(&self) -> Result<()> {
@@ -112,7 +124,22 @@ impl Profile {
             "unknown network profile {:?}",
             self.network_profile
         );
+        ensure!(AUDIO_OUTPUTS.contains(&self.audio_output.as_str()), "unknown audio output {:?}", self.audio_output);
         Ok(())
+    }
+
+    /// This profile with `overrides`' fields in place of its own. Fields
+    /// it doesn't have are skipped: one a newer veild stored, say.
+    pub fn with(&self, overrides: &Overrides) -> Result<Profile> {
+        let serde_json::Value::Object(mut fields) = serde_json::to_value(self)? else {
+            bail!("a profile is a JSON object");
+        };
+        for (key, value) in overrides {
+            if let Some(field) = fields.get_mut(key) {
+                *field = value.clone();
+            }
+        }
+        serde_json::from_value(serde_json::Value::Object(fields)).context("an override has the wrong type")
     }
 
     fn to_proto(&self) -> ClientProfile {
@@ -128,6 +155,7 @@ impl Profile {
             microphone: self.microphone,
             debug_logging: self.debug_logging,
             display_sleep_minutes: self.display_sleep_minutes,
+            audio_output: self.audio_output.clone(),
         }
     }
 }
@@ -220,6 +248,8 @@ struct Live {
     session: Option<Session>,
     /// To the connection's push task.
     commands: mpsc::UnboundedSender<WispAction>,
+    /// Tells the push task the client's own settings changed.
+    overrides_changed: Arc<Notify>,
 }
 
 /// One client as the admin UI shows it.
@@ -271,12 +301,65 @@ impl ThinClients {
         self.profile.borrow().clone()
     }
 
-    /// Stores the profile and pushes it to every connected client.
+    /// Stores the defaults and pushes them to every connected client, with
+    /// each one's own settings in their place.
     pub fn set_profile(&self, profile: Profile) -> Result<()> {
         profile.validate()?;
         self.db.set_setting(PROFILE_KEY, &serde_json::to_string(&profile)?)?;
         self.profile.send_replace(profile);
         Ok(())
+    }
+
+    /// The settings `mac` sets for itself; empty: none, or none readable.
+    pub fn overrides(&self, mac: &str) -> Overrides {
+        let json = match self.db.thin_client_overrides(mac) {
+            Ok(Some(json)) => json,
+            Ok(None) => return Overrides::new(),
+            Err(e) => {
+                warn!(mac, error = %e, "thin clients: reading a client's settings failed; using the defaults");
+                return Overrides::new();
+            }
+        };
+        serde_json::from_str(&json).unwrap_or_else(|e| {
+            warn!(mac, error = %e, "thin clients: a client's stored settings don't parse; using the defaults");
+            Overrides::new()
+        })
+    }
+
+    /// What `mac` applies: the defaults with its own settings in place.
+    pub fn effective_profile(&self, mac: &str) -> Profile {
+        let defaults = self.profile();
+        let overrides = self.overrides(mac);
+        if overrides.is_empty() {
+            return defaults;
+        }
+        match defaults.with(&overrides).and_then(|p| p.validate().map(|()| p)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(mac, error = %format!("{e:#}"), "thin clients: a client's stored settings don't apply; using the defaults");
+                defaults
+            }
+        }
+    }
+
+    /// Replaces `mac`'s own settings (empty: back to the defaults) and
+    /// pushes the result if it is online. False when there is no such
+    /// client.
+    pub fn set_overrides(&self, mac: &str, overrides: &Overrides) -> Result<bool> {
+        let defaults = self.profile();
+        let fields = serde_json::to_value(&defaults)?;
+        for key in overrides.keys() {
+            ensure!(fields.get(key).is_some(), "unknown setting {key:?}");
+        }
+        defaults.with(overrides)?.validate()?;
+        let json = if overrides.is_empty() { None } else { Some(serde_json::to_string(overrides)?) };
+        if !self.db.set_thin_client_overrides(mac, json.as_deref())? {
+            return Ok(false);
+        }
+        if let Some(live) = self.online().get(mac) {
+            live.overrides_changed.notify_one();
+        }
+        Ok(true)
     }
 
     pub fn is_online(&self, mac: &str) -> bool {
@@ -409,7 +492,7 @@ impl std::fmt::Display for Closed {
 
 impl std::error::Error for Closed {}
 
-async fn serve_inner(conn: &quinn::Connection, veil: &Veil, peer: SocketAddr, slot: StartupSlot) -> Result<()> {
+async fn serve_inner(conn: &quinn::Connection, veil: &Arc<Veil>, peer: SocketAddr, slot: StartupSlot) -> Result<()> {
     let thin = &veil.thin_clients;
     // The same deadline as a login's, from the handshake.
     let grace = veil.config.auth.login_grace_time;
@@ -455,20 +538,28 @@ async fn serve_inner(conn: &quinn::Connection, veil: &Veil, peer: SocketAddr, sl
     let report = Report::from_hello(&hello, peer.ip());
     thin.db.thin_client_seen(&mac, &serde_json::to_string(&report)?)?;
     let mut profile = thin.profile.subscribe();
-    let welcome = WispWelcome { profile: Some(profile.borrow_and_update().to_proto()) };
+    profile.mark_unchanged();
+    let mut sent = thin.effective_profile(&mac).to_proto();
+    let welcome = WispWelcome { profile: Some(sent.clone()) };
     write_frame(&mut send, &WispEnvelope { msg: Some(Msg::Welcome(welcome)) }).await?;
 
     let generation = thin.generations.fetch_add(1, Ordering::Relaxed);
     let session = hello.session.as_ref().and_then(Session::from_proto);
     let (commands, mut command_rx) = mpsc::unbounded_channel();
-    let live = Live { generation, conn: conn.clone(), session, commands };
+    let overrides_changed = Arc::new(Notify::new());
+    // A change to the client's own settings since the welcome was read.
+    overrides_changed.notify_one();
+    let live = Live { generation, conn: conn.clone(), session, commands, overrides_changed: overrides_changed.clone() };
     if let Some(old) = thin.online().insert(mac.clone(), live) {
         old.conn.close(VarInt::from_u32(0), b"replaced by a newer connection");
     }
     info!(%peer, mac, hostname = %hello.hostname, image = %hello.image_version, "thin clients: online");
 
     // Profile pushes and commands go out from their own task, so the read
-    // below is never cancelled halfway through a frame.
+    // below is never cancelled halfway through a frame. A change to the
+    // defaults that the client's own settings override sends nothing.
+    let veil_ = veil.clone();
+    let mac_ = mac.clone();
     let pusher = tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
@@ -476,9 +567,22 @@ async fn serve_inner(conn: &quinn::Connection, veil: &Veil, peer: SocketAddr, sl
                     if changed.is_err() {
                         break;
                     }
-                    Msg::Profile(WispProfile { profile: Some(profile.borrow_and_update().to_proto()) })
+                    profile.mark_unchanged();
+                    None
                 }
-                Some(action) = command_rx.recv() => Msg::Command(WispCommand { action: action as i32 }),
+                () = overrides_changed.notified() => None,
+                Some(action) = command_rx.recv() => Some(Msg::Command(WispCommand { action: action as i32 })),
+            };
+            let msg = match msg {
+                Some(msg) => msg,
+                None => {
+                    let now = veil_.thin_clients.effective_profile(&mac_).to_proto();
+                    if now == sent {
+                        continue;
+                    }
+                    sent = now.clone();
+                    Msg::Profile(WispProfile { profile: Some(now) })
+                }
             };
             if write_frame(&mut send, &WispEnvelope { msg: Some(msg) }).await.is_err() {
                 break;
@@ -538,6 +642,7 @@ mod tests {
             Profile { preferred_codec: "vp9".into(), ..Default::default() },
             Profile { network_profile: "".into(), ..Default::default() },
             Profile { display_sleep_minutes: 1441, ..Default::default() },
+            Profile { audio_output: "hdmi".into(), ..Default::default() },
         ] {
             assert!(bad.validate().is_err(), "{bad:?}");
         }
@@ -555,6 +660,48 @@ mod tests {
         assert_eq!(*rx.borrow_and_update(), changed);
         assert!(thin.set_profile(Profile { view: "nope".into(), ..Default::default() }).is_err());
         assert_eq!(ThinClients::new(db, None).profile(), changed);
+    }
+
+    fn overrides(json: serde_json::Value) -> Overrides {
+        json.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_clients_own_settings_override_the_defaults() {
+        let db = Arc::new(Db::in_memory());
+        let thin = ThinClients::new(db.clone(), None);
+        let mac = "52:54:00:12:34:56";
+        assert!(!thin.set_overrides(mac, &overrides(serde_json::json!({"view": "fit"}))).unwrap());
+        db.thin_client_seen(mac, "{}").unwrap();
+        thin.set_overrides(mac, &overrides(serde_json::json!({"audio_output": "builtin", "display_sleep_minutes": 0})))
+            .unwrap();
+        thin.set_profile(Profile { network_profile: "lan".into(), display_sleep_minutes: 5, ..Default::default() })
+            .unwrap();
+        let p = thin.effective_profile(mac);
+        assert_eq!((p.audio_output.as_str(), p.display_sleep_minutes, p.network_profile.as_str()), ("builtin", 0, "lan"));
+        assert_eq!(thin.effective_profile("52:54:00:00:00:01").display_sleep_minutes, 5);
+        thin.set_overrides(mac, &Overrides::new()).unwrap();
+        assert_eq!(thin.effective_profile(mac), thin.profile());
+        assert_eq!(db.thin_client_overrides(mac).unwrap(), None);
+    }
+
+    #[test]
+    fn a_clients_own_settings_are_checked() {
+        let db = Arc::new(Db::in_memory());
+        let thin = ThinClients::new(db.clone(), None);
+        let mac = "52:54:00:12:34:56";
+        db.thin_client_seen(mac, "{}").unwrap();
+        for bad in [
+            serde_json::json!({"audio_output": "hdmi"}),
+            serde_json::json!({"microphone": "yes"}),
+            serde_json::json!({"no_such_setting": true}),
+        ] {
+            assert!(thin.set_overrides(mac, &overrides(bad.clone())).is_err(), "{bad}");
+        }
+        assert!(thin.overrides(mac).is_empty());
+        // One stored by a newer veild is skipped, the rest still apply.
+        db.set_thin_client_overrides(mac, Some(r#"{"view":"fit","from_the_future":1}"#)).unwrap();
+        assert_eq!(thin.effective_profile(mac).view, "fit");
     }
 
     #[test]

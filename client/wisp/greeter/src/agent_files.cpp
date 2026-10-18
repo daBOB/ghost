@@ -55,6 +55,11 @@ unsigned load_display_sleep_minutes(const QString &run_dir) {
 	return (unsigned)read_profile(run_dir).value("display_sleep_minutes").toInt(kDefaultDisplaySleepMinutes);
 }
 
+QString load_audio_output(const QString &run_dir) {
+	QString output = read_profile(run_dir).value("audio_output").toString();
+	return output == "builtin" || output == "auto" ? output : "display";
+}
+
 void write_session(const QString &run_dir, const QString &user, const QString &host_name,
 	qint64 spectre_pid) {
 	QJsonObject session{

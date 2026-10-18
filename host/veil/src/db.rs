@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS thin_clients (
     last_seen INTEGER NOT NULL,
     last_report TEXT NOT NULL
 );
+-- A thin client's own settings: the profile fields it overrides, as a JSON
+-- object. Goes with the client.
+CREATE TABLE IF NOT EXISTS thin_client_settings (
+    mac TEXT PRIMARY KEY REFERENCES thin_clients(mac) ON DELETE CASCADE,
+    overrides TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -534,6 +540,33 @@ impl Db {
         Ok(self.conn().execute("DELETE FROM thin_clients WHERE mac = ?1", params![mac])? == 1)
     }
 
+    /// A thin client's overrides as JSON; None: it has none.
+    pub fn thin_client_overrides(&self, mac: &str) -> Result<Option<String>> {
+        self.conn()
+            .query_row("SELECT overrides FROM thin_client_settings WHERE mac = ?1", params![mac], |r| r.get(0))
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Replaces a known thin client's overrides; None drops them. False
+    /// when there is no such client.
+    pub fn set_thin_client_overrides(&self, mac: &str, overrides: Option<&str>) -> Result<bool> {
+        let conn = self.conn();
+        let known = conn.query_row("SELECT 1 FROM thin_clients WHERE mac = ?1", params![mac], |_| Ok(())).optional()?;
+        if known.is_none() {
+            return Ok(false);
+        }
+        match overrides {
+            Some(json) => conn.execute(
+                "INSERT INTO thin_client_settings (mac, overrides) VALUES (?1, ?2)
+                 ON CONFLICT(mac) DO UPDATE SET overrides = ?2",
+                params![mac, json],
+            )?,
+            None => conn.execute("DELETE FROM thin_client_settings WHERE mac = ?1", params![mac])?,
+        };
+        Ok(true)
+    }
+
     // --- settings: Veil-wide values the admin UI edits, as JSON ---
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -771,6 +804,24 @@ mod tests {
         assert!(db.remove_thin_client("52:54:00:12:34:56").unwrap());
         assert!(db.thin_client("52:54:00:12:34:56").unwrap().is_none());
         assert!(!db.rename_thin_client("52:54:00:12:34:56", "x").unwrap());
+    }
+
+    #[test]
+    fn thin_client_overrides_go_with_the_client() {
+        let db = Db::in_memory();
+        let mac = "52:54:00:12:34:56";
+        assert!(!db.set_thin_client_overrides(mac, Some("{}")).unwrap());
+        db.thin_client_seen(mac, "{}").unwrap();
+        assert_eq!(db.thin_client_overrides(mac).unwrap(), None);
+        assert!(db.set_thin_client_overrides(mac, Some(r#"{"view":"fit"}"#)).unwrap());
+        assert!(db.set_thin_client_overrides(mac, Some(r#"{"view":"actual"}"#)).unwrap());
+        assert_eq!(db.thin_client_overrides(mac).unwrap().as_deref(), Some(r#"{"view":"actual"}"#));
+        assert!(db.set_thin_client_overrides(mac, None).unwrap());
+        assert_eq!(db.thin_client_overrides(mac).unwrap(), None);
+        db.set_thin_client_overrides(mac, Some(r#"{"view":"fit"}"#)).unwrap();
+        db.remove_thin_client(mac).unwrap();
+        db.thin_client_seen(mac, "{}").unwrap();
+        assert_eq!(db.thin_client_overrides(mac).unwrap(), None);
     }
 
     #[test]

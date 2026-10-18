@@ -630,14 +630,14 @@ async fn the_thin_client_profile_is_edited_and_checked() {
 
     // Unticked boxes are simply absent from the form.
     let form = format!(
-        "csrf={csrf}&resolution=1920x1080&view=fit&preferred_decoder=software&preferred_codec=h264&network_profile=lan&forward_gamepads=1&display_sleep_minutes=45"
+        "csrf={csrf}&resolution=1920x1080&view=fit&preferred_decoder=software&preferred_codec=h264&network_profile=lan&forward_gamepads=1&audio_output=builtin&display_sleep_minutes=45"
     );
     let (status, _, _) = send(&h.app, post("/admin/thin-clients/settings", Some(&cookie), &form)).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let p = h.veil.thin_clients.profile();
     assert_eq!((p.resolution.as_str(), p.view.as_str(), p.preferred_decoder.as_str()), ("1920x1080", "fit", "software"));
     assert!(!p.lossless_refinement && !p.allow_pyrowave && p.forward_gamepads);
-    assert_eq!(p.display_sleep_minutes, 45);
+    assert_eq!((p.display_sleep_minutes, p.audio_output.as_str()), (45, "builtin"));
     let entry = &h.veil.db.audit_log(1, None).unwrap()[0].1;
     assert_eq!(entry.action, "thin client settings changed");
     assert!(entry.detail.contains("network_profile auto -> lan") && entry.detail.contains("lossless_refinement on -> off"), "{}", entry.detail);
@@ -645,8 +645,73 @@ async fn the_thin_client_profile_is_edited_and_checked() {
     let (_, _, body) = send(&h.app, get("/admin/thin-clients/settings", Some(&cookie))).await;
     assert!(body.contains(r#"<option value="1920x1080" selected>"#), "{body}");
 
-    let bad = format!("csrf={csrf}&resolution=huge&view=&preferred_decoder=vulkan&preferred_codec=&network_profile=auto&display_sleep_minutes=20");
+    let bad = format!("csrf={csrf}&resolution=huge&view=&preferred_decoder=vulkan&preferred_codec=&network_profile=auto&audio_output=display&display_sleep_minutes=20");
     let (status, _, _) = send(&h.app, post("/admin/thin-clients/settings", Some(&cookie), &bad)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(h.veil.thin_clients.profile().resolution, "1920x1080", "unchanged");
+}
+
+#[tokio::test]
+async fn a_thin_client_has_its_own_settings() {
+    let h = harness();
+    let mac = "52:54:00:12:34:56";
+    h.veil.db.thin_client_seen(mac, r#"{"hostname":"wisp-525400123456"}"#).unwrap();
+    let (cookie, csrf) = sign_in(&h).await;
+    let path = format!("/admin/thin-clients/{mac}/settings");
+    let (_, _, body) = send(&h.app, get(&format!("/admin/thin-clients/{mac}"), Some(&cookie))).await;
+    assert!(body.contains("Uses the <a"), "{body}");
+
+    // Everything starts at the default's, which the page names.
+    let (status, _, body) = send(&h.app, get(&path, Some(&cookie))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(r#"<option value="inherit" selected>Default (The display (HDMI/DisplayPort))</option>"#), "{body}");
+    assert!(body.contains(r#"<option value="inherit" selected>Default (On)</option>"#), "{body}");
+    assert!(body.contains(r#"placeholder="20 (default)""#), "{body}");
+
+    // Only what isn't left at the default's is stored.
+    let form = format!(
+        "csrf={csrf}&resolution=inherit&view=inherit&preferred_decoder=inherit&preferred_codec=inherit&lossless_refinement=off\
+         &allow_pyrowave=inherit&network_profile=inherit&forward_gamepads=inherit&microphone=inherit&debug_logging=inherit\
+         &audio_output=builtin&display_sleep_minutes="
+    );
+    let (status, _, _) = send(&h.app, post(&path, Some(&cookie), &form)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let own = h.veil.thin_clients.overrides(mac);
+    assert_eq!(serde_json::Value::Object(own), serde_json::json!({"audio_output": "builtin", "lossless_refinement": false}));
+    let entry = &h.veil.db.audit_log(1, None).unwrap()[0].1;
+    assert_eq!(entry.action, "thin client's own settings changed");
+    assert!(entry.detail.contains("audio_output default -> builtin") && entry.detail.contains(mac), "{}", entry.detail);
+
+    // The defaults still reach what it doesn't set itself.
+    h.veil.thin_clients.set_profile(crate::thin_clients::Profile { display_sleep_minutes: 5, ..Default::default() }).unwrap();
+    let p = h.veil.thin_clients.effective_profile(mac);
+    assert_eq!((p.audio_output.as_str(), p.lossless_refinement, p.display_sleep_minutes), ("builtin", false, 5));
+    let (_, _, body) = send(&h.app, get(&path, Some(&cookie))).await;
+    assert!(body.contains(r#"<option value="builtin" selected>"#) && body.contains(r#"placeholder="5 (default)""#), "{body}");
+    let (_, _, body) = send(&h.app, get(&format!("/admin/thin-clients/{mac}"), Some(&cookie))).await;
+    assert!(body.contains("<dt>Play sound through</dt><dd>Built-in speaker or audio jack</dd>"), "{body}");
+
+    let bad = format!("csrf={csrf}&microphone=maybe");
+    let (status, _, _) = send(&h.app, post(&path, Some(&cookie), &bad)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let bad = format!("csrf={csrf}&audio_output=hdmi");
+    let (status, _, _) = send(&h.app, post(&path, Some(&cookie), &bad)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = send(&h.app, post(&path, Some(&cookie), "audio_output=auto")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(h.veil.thin_clients.overrides(mac).len(), 2, "unchanged");
+
+    let (status, _, _) = send(&h.app, post(&path, Some(&cookie), &format!("csrf={csrf}&reset=1"))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(h.veil.thin_clients.overrides(mac).is_empty());
+
+    // Removing the client forgets them.
+    h.veil.thin_clients.set_overrides(mac, &serde_json::json!({"view": "fit"}).as_object().unwrap().clone()).unwrap();
+    let (status, _, _) =
+        send(&h.app, post(&format!("/admin/thin-clients/{mac}/remove"), Some(&cookie), &format!("csrf={csrf}"))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    h.veil.db.thin_client_seen(mac, "{}").unwrap();
+    assert!(h.veil.thin_clients.overrides(mac).is_empty());
+    let (status, _, _) = send(&h.app, get("/admin/thin-clients/52:54:00:00:00:99/settings", Some(&cookie))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

@@ -26,5 +26,9 @@ bool load_debug_logging(const QString &run_dir);
 // profile.json's display_sleep_minutes (0: never).
 unsigned load_display_sleep_minutes(const QString &run_dir);
 
+// profile.json's audio_output: "display", "builtin" or "auto"; "display"
+// without one (a Veil that predates it).
+QString load_audio_output(const QString &run_dir);
+
 void write_session(const QString &run_dir, const QString &user, const QString &host_name, qint64 spectre_pid);
 void clear_session(const QString &run_dir);

@@ -3,8 +3,10 @@
 
 // The admin UI's Thin Clients pages (docs/design/wisp.md): the list of
 // Wisp clients, one client's report with log out, restart and shut down,
-// and the spectre profile every client applies. The live state is
+// the default settings every client applies, and one client's own. The live state is
 // crate::thin_clients'.
+use std::collections::HashMap;
+
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -15,7 +17,7 @@ use ipc::wisp::WispAction;
 use serde::Deserialize;
 
 use super::{ago, error_page, has_control, internal, render, utc, Admin, CsrfForm, Nav, NoticeQuery, WebState};
-use crate::thin_clients::{ClientView, Profile, Report, CODECS};
+use crate::thin_clients::{ClientView, Overrides, Profile, Report, CODECS};
 
 /// Offered after "Match the client's display", as in spectre-qt's dialog.
 const RESOLUTIONS: &[&str] = &["1280x720", "1366x768", "1600x900", "1920x1080", "2560x1440", "3840x2160"];
@@ -140,6 +142,8 @@ struct DetailPage {
     session_since: String,
     memory: String,
     displays: Vec<String>,
+    /// The settings it sets itself: (label, value).
+    own_settings: Vec<(String, String)>,
 }
 
 pub(super) async fn detail(
@@ -179,6 +183,7 @@ pub(super) async fn detail(
             "unknown".into()
         },
         displays,
+        own_settings: own_settings(&state.veil.thin_clients.overrides(&mac)),
         report,
     })
 }
@@ -289,14 +294,143 @@ pub(super) async fn act(
     state.veil.db.audit(&admin.username, audit, None, &detail, None);
     Redirect::to(&format!("/admin/thin-clients/{mac}?notice={}", form.action)).into_response()
 }
+// --- settings: the defaults, and one client's own ---
 
-#[derive(Template)]
-#[template(path = "thin_client_settings.html")]
-struct SettingsPage {
-    nav: Nav,
-    p: Profile,
-    resolutions: Vec<String>,
-    codecs: Vec<(String, String)>,
+/// One setting, as both settings pages show it. `key` is its Profile
+/// field's JSON name.
+struct Field {
+    key: &'static str,
+    label: &'static str,
+    /// HTML.
+    hint: &'static str,
+    kind: Kind,
+}
+
+enum Kind {
+    /// (value, label)
+    Choice(Vec<(String, String)>),
+    Flag,
+    Minutes,
+}
+
+struct Section {
+    title: &'static str,
+    fields: Vec<Field>,
+}
+
+fn choices(list: &[(&str, &str)]) -> Kind {
+    Kind::Choice(list.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect())
+}
+
+/// Every setting, laid out like spectre-qt's Settings dialog minus what a
+/// kiosk makes moot, then the client's own.
+fn sections() -> Vec<Section> {
+    let mut resolutions = vec![(String::new(), "Match the client's display".to_string())];
+    resolutions.extend(RESOLUTIONS.iter().map(|r| (r.to_string(), r.to_string())));
+    let field = |key, label, hint, kind| Field { key, label, hint, kind };
+    vec![
+        Section {
+            title: "Display",
+            fields: vec![
+                field("resolution", "Resolution", "", Kind::Choice(resolutions)),
+                field(
+                    "view",
+                    "View",
+                    "Fit to window scales the remote desktop to the screen. Actual size shows it pixel for pixel, panned by pushing the pointer against an edge when it is bigger.",
+                    choices(&[("", "As last set in the session menu"), ("fit", "Fit to window"), ("actual", "Actual size")]),
+                ),
+            ],
+        },
+        Section {
+            title: "Decoding",
+            fields: vec![field(
+                "preferred_decoder",
+                "Preferred decoder",
+                "Which decoder to try first. A hardware decoder that isn't available falls back to the other one, then to software. NVIDIA cards never use VA-API, since they have none.",
+                choices(&[("vulkan", "Vulkan Video"), ("native", "VA-API"), ("software", "Software")]),
+            )],
+        },
+        Section {
+            title: "Codec",
+            fields: vec![
+                field(
+                    "preferred_codec",
+                    "Video codec",
+                    "Which codec to offer first. The host picks the first one it can encode: a preference, not a demand.",
+                    Kind::Choice(codec_choices()),
+                ),
+                field(
+                    "lossless_refinement",
+                    "Start sessions lossless",
+                    "Once a region of the screen stops changing, the host re-sends it losslessly so text and UI become pixel-exact. Costs the host a frame readback per frame. Off, every session starts with it off; either way the session menu's Lossless Refinement row switches it.",
+                    Kind::Flag,
+                ),
+                field(
+                    "allow_pyrowave",
+                    "Use PyroWave on a wired LAN",
+                    "The lowest latency there is, at several hundred Mbit/s: offered first only when the host is directly reachable over a wired link of 1 Gbit/s or more, and used only if the host has turned it on.",
+                    Kind::Flag,
+                ),
+            ],
+        },
+        Section {
+            title: "Network",
+            fields: vec![field(
+                "network_profile",
+                "Connection",
+                "What kind of link the client is on, so the host can pace the stream to it. Auto lets the host work it out from what it measures.",
+                choices(&[("auto", "Auto"), ("lan", "LAN"), ("internet", "Internet"), ("mobile", "Mobile / lossy Wi-Fi")]),
+            )],
+        },
+        Section {
+            title: "Input",
+            fields: vec![
+                field(
+                    "forward_gamepads",
+                    "Forward gamepads",
+                    "Mirror controllers plugged into the client onto the host as virtual gamepads (up to four), if the host supports it.",
+                    Kind::Flag,
+                ),
+                field(
+                    "microphone",
+                    "Send microphone",
+                    "Send the client's microphone to the host, where applications see it as a microphone, if the host supports it. Off by default.",
+                    Kind::Flag,
+                ),
+            ],
+        },
+        Section {
+            title: "Audio",
+            fields: vec![field(
+                "audio_output",
+                "Play sound through",
+                "The display: the monitor's or TV's speakers, over HDMI or DisplayPort, kept while the display sleeps. Built-in: the client's own speaker or audio jack. Automatic: whatever the client picks itself, which on many PCs is the built-in speaker. Applies at once, in a running session too.",
+                choices(&[
+                    ("display", "The display (HDMI/DisplayPort)"),
+                    ("builtin", "Built-in speaker or audio jack"),
+                    ("auto", "Automatic"),
+                ]),
+            )],
+        },
+        Section {
+            title: "Diagnostics",
+            fields: vec![field(
+                "debug_logging",
+                "Enable Spectre debug logging",
+                "Run spectre with its debug log on: more detail in the client's journal, and in the client's half of a support report (<code>wraith --report</code> on the host). For chasing a problem; off by default.",
+                Kind::Flag,
+            )],
+        },
+        Section {
+            title: "Power",
+            fields: vec![field(
+                "display_sleep_minutes",
+                "Turn the display off after",
+                "Without keyboard, mouse or gamepad input, at the sign-in screen or in a session. Any input wakes it. 0: never.",
+                Kind::Minutes,
+            )],
+        },
+    ]
 }
 
 fn codec_choices() -> Vec<(String, String)> {
@@ -315,65 +449,231 @@ fn codec_choices() -> Vec<(String, String)> {
         .collect()
 }
 
+/// The form value a client's page uses for "the default's".
+const INHERIT: &str = "inherit";
+
+/// A field as the template renders it: `kind` "choice", "flag" (a
+/// checkbox) or "minutes". On a client's page a flag is a choice too, of
+/// the default's, on and off.
+struct FieldView {
+    key: &'static str,
+    label: &'static str,
+    hint: &'static str,
+    kind: &'static str,
+    options: Vec<ChoiceView>,
+    checked: bool,
+    /// A minutes field's value; empty on a client's page: the default's.
+    value: String,
+    placeholder: String,
+    /// The client sets this one itself.
+    overridden: bool,
+}
+
+struct ChoiceView {
+    value: String,
+    label: String,
+    selected: bool,
+}
+
+struct SectionView {
+    title: &'static str,
+    fields: Vec<FieldView>,
+}
+
+fn profile_fields(p: &Profile) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(p) {
+        Ok(serde_json::Value::Object(fields)) => fields,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// How `value` reads on the page: a choice's label, "On"/"Off", or the
+/// number.
+fn value_label(field: &Field, value: &serde_json::Value) -> String {
+    match (&field.kind, value) {
+        (Kind::Choice(list), serde_json::Value::String(s)) => {
+            list.iter().find(|(v, _)| v == s).map(|(_, l)| l.clone()).unwrap_or_else(|| s.clone())
+        }
+        (_, serde_json::Value::Bool(b)) => if *b { "On" } else { "Off" }.to_string(),
+        (Kind::Minutes, serde_json::Value::Number(n)) => format!("{n} min"),
+        (_, other) => other.to_string(),
+    }
+}
+
+/// The defaults page shows `defaults`; a client's page (`overrides` set)
+/// shows what the client sets itself, and the default's for the rest.
+fn section_views(defaults: &Profile, overrides: Option<&Overrides>) -> Vec<SectionView> {
+    let base = profile_fields(defaults);
+    sections()
+        .into_iter()
+        .map(|s| SectionView {
+            title: s.title,
+            fields: s
+                .fields
+                .iter()
+                .map(|f| {
+                    let default = base.get(f.key).cloned().unwrap_or(serde_json::Value::Null);
+                    let own = overrides.and_then(|o| o.get(f.key));
+                    let shown = own.unwrap_or(&default);
+                    // The value itself is selected unless the client's page
+                    // leaves it at the default's.
+                    let pick = overrides.is_none() || own.is_some();
+                    let mut view = FieldView {
+                        key: f.key,
+                        label: f.label,
+                        hint: f.hint,
+                        kind: "choice",
+                        options: Vec::new(),
+                        checked: false,
+                        value: String::new(),
+                        placeholder: String::new(),
+                        overridden: own.is_some(),
+                    };
+                    let mut option = |value: &str, label: String, selected: bool| {
+                        view.options.push(ChoiceView { value: value.to_string(), label, selected })
+                    };
+                    if overrides.is_some() && !matches!(f.kind, Kind::Minutes) {
+                        option(INHERIT, format!("Default ({})", value_label(f, &default)), own.is_none());
+                    }
+                    match &f.kind {
+                        Kind::Choice(list) => {
+                            let current = shown.as_str().unwrap_or_default();
+                            for (value, label) in list {
+                                option(value, label.clone(), pick && value == current);
+                            }
+                            // A value the list doesn't offer (a resolution
+                            // set elsewhere) stays selectable.
+                            if pick && !list.iter().any(|(v, _)| v == current) {
+                                option(current, current.to_string(), true);
+                            }
+                        }
+                        Kind::Flag if overrides.is_some() => {
+                            let on = own.and_then(|v| v.as_bool());
+                            option("on", "On".into(), on == Some(true));
+                            option("off", "Off".into(), on == Some(false));
+                        }
+                        Kind::Flag => {
+                            view.kind = "flag";
+                            view.checked = shown.as_bool().unwrap_or(false);
+                        }
+                        Kind::Minutes => {
+                            view.kind = "minutes";
+                            match overrides {
+                                Some(_) => {
+                                    view.value = own.map(|v| v.to_string()).unwrap_or_default();
+                                    view.placeholder = format!("{default} (default)");
+                                }
+                                None => view.value = shown.to_string(),
+                            }
+                        }
+                    }
+                    view
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The form's settings: every field for the defaults page; only the ones
+/// not left at the default's for a client's page (`own`). Err: the message
+/// to show.
+fn parse_fields(form: &HashMap<String, String>, own: bool) -> Result<Overrides, String> {
+    let mut fields = Overrides::new();
+    for s in sections() {
+        for f in &s.fields {
+            let raw = form.get(f.key).map(|v| v.trim()).unwrap_or_default();
+            let value = match &f.kind {
+                _ if own && raw == INHERIT => continue,
+                Kind::Minutes if own && raw.is_empty() => continue,
+                Kind::Choice(_) => serde_json::Value::String(raw.to_string()),
+                Kind::Flag if own => match raw {
+                    "on" => serde_json::Value::Bool(true),
+                    "off" => serde_json::Value::Bool(false),
+                    _ => return Err(format!("{} must be the default's, on or off.", f.label)),
+                },
+                // A checkbox: absent when unticked.
+                Kind::Flag => serde_json::Value::Bool(!raw.is_empty()),
+                Kind::Minutes => match raw.parse::<u32>() {
+                    Ok(n) => n.into(),
+                    Err(_) => return Err(format!("{} must be a whole number of minutes.", f.label)),
+                },
+            };
+            fields.insert(f.key.to_string(), value);
+        }
+    }
+    Ok(fields)
+}
+
+/// "network_profile auto -> lan, lossless_refinement on -> off", for the
+/// audit log; a field one side lacks reads "default" there.
+fn describe_changes(before: &Overrides, after: &Overrides) -> String {
+    let show = |v: Option<&serde_json::Value>| match v {
+        None => "default".to_string(),
+        Some(serde_json::Value::Bool(true)) => "on".to_string(),
+        Some(serde_json::Value::Bool(false)) => "off".to_string(),
+        Some(serde_json::Value::String(s)) if s.is_empty() => "default".to_string(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    };
+    let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .filter(|k| before.get(*k) != after.get(*k))
+        .map(|k| format!("{k} {} -> {}", show(before.get(k)), show(after.get(k))))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What a client sets itself, as its page's summary shows it: (label,
+/// value).
+fn own_settings(overrides: &Overrides) -> Vec<(String, String)> {
+    sections()
+        .iter()
+        .flat_map(|s| &s.fields)
+        .filter_map(|f| overrides.get(f.key).map(|v| (f.label.to_string(), value_label(f, v))))
+        .collect()
+}
+
+#[derive(Template)]
+#[template(path = "thin_client_settings.html")]
+struct SettingsPage {
+    nav: Nav,
+    sections: Vec<SectionView>,
+    /// Set on a client's page.
+    client: Option<SettingsClient>,
+}
+
+struct SettingsClient {
+    mac: String,
+    name: String,
+    own: usize,
+}
+
 pub(super) async fn settings(State(state): State<WebState>, admin: Admin, Query(q): Query<NoticeQuery>) -> Response {
     render(&SettingsPage {
         nav: admin.nav("thin_clients", notice_text(&q.notice)),
-        p: state.veil.thin_clients.profile(),
-        resolutions: RESOLUTIONS.iter().map(|r| r.to_string()).collect(),
-        codecs: codec_choices(),
+        sections: section_views(&state.veil.thin_clients.profile(), None),
+        client: None,
     })
-}
-
-#[derive(Deserialize)]
-pub(super) struct ProfileForm {
-    #[serde(default)]
-    csrf: String,
-    #[serde(default)]
-    resolution: String,
-    #[serde(default)]
-    view: String,
-    #[serde(default)]
-    preferred_decoder: String,
-    #[serde(default)]
-    preferred_codec: String,
-    lossless_refinement: Option<String>,
-    allow_pyrowave: Option<String>,
-    #[serde(default)]
-    network_profile: String,
-    forward_gamepads: Option<String>,
-    microphone: Option<String>,
-    debug_logging: Option<String>,
-    #[serde(default)]
-    display_sleep_minutes: String,
 }
 
 pub(super) async fn save_settings(
     State(state): State<WebState>,
     admin: Admin,
     headers: HeaderMap,
-    Form(form): Form<ProfileForm>,
+    Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    if let Err(r) = admin.check_csrf(&headers, &form.csrf) {
+    if let Err(r) = admin.check_csrf(&headers, form.get("csrf").map(String::as_str).unwrap_or_default()) {
         return r;
     }
-    let Ok(display_sleep_minutes) = form.display_sleep_minutes.trim().parse::<u32>() else {
-        return error_page(StatusCode::BAD_REQUEST, "Not saved", "Display sleep must be a whole number of minutes.");
-    };
-    let profile = Profile {
-        resolution: form.resolution.trim().to_string(),
-        view: form.view,
-        preferred_decoder: form.preferred_decoder,
-        preferred_codec: form.preferred_codec,
-        lossless_refinement: form.lossless_refinement.is_some(),
-        allow_pyrowave: form.allow_pyrowave.is_some(),
-        network_profile: form.network_profile,
-        forward_gamepads: form.forward_gamepads.is_some(),
-        microphone: form.microphone.is_some(),
-        debug_logging: form.debug_logging.is_some(),
-        display_sleep_minutes,
-    };
     let thin = &state.veil.thin_clients;
     let before = thin.profile();
+    let profile = match parse_fields(&form, false).map(|fields| before.with(&fields)) {
+        Ok(Ok(profile)) => profile,
+        Ok(Err(e)) => return error_page(StatusCode::BAD_REQUEST, "Not saved", &format!("{e:#}.")),
+        Err(message) => return error_page(StatusCode::BAD_REQUEST, "Not saved", &message),
+    };
     if let Err(e) = profile.validate() {
         return error_page(StatusCode::BAD_REQUEST, "Not saved", &format!("{e}."));
     }
@@ -381,29 +681,66 @@ pub(super) async fn save_settings(
         if let Err(e) = thin.set_profile(profile.clone()) {
             return internal(e);
         }
-        state.veil.db.audit(&admin.username, "thin client settings changed", None, &describe_changes(&before, &profile), None);
+        let detail = describe_changes(&profile_fields(&before), &profile_fields(&profile));
+        state.veil.db.audit(&admin.username, "thin client settings changed", None, &detail, None);
     }
     Redirect::to("/admin/thin-clients/settings?notice=saved").into_response()
 }
 
-/// "network_profile auto -> lan, lossless_refinement on -> off", for the
-/// audit log.
-fn describe_changes(before: &Profile, after: &Profile) -> String {
-    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) =
-        (serde_json::to_value(before), serde_json::to_value(after))
-    else {
-        return String::new();
+pub(super) async fn client_settings(
+    State(state): State<WebState>,
+    admin: Admin,
+    Path(mac): Path<String>,
+    Query(q): Query<NoticeQuery>,
+) -> Response {
+    let thin = &state.veil.thin_clients;
+    let view = match thin.get(&mac) {
+        Ok(Some(view)) => view,
+        Ok(None) => return error_page(StatusCode::NOT_FOUND, "No such thin client", "It may have been removed."),
+        Err(e) => return internal(e),
     };
-    let show = |v: &serde_json::Value| match v {
-        serde_json::Value::Bool(true) => "on".to_string(),
-        serde_json::Value::Bool(false) => "off".to_string(),
-        serde_json::Value::String(s) if s.is_empty() => "default".to_string(),
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
+    let overrides = thin.overrides(&mac);
+    render(&SettingsPage {
+        nav: admin.nav("thin_clients", notice_text(&q.notice)),
+        sections: section_views(&thin.profile(), Some(&overrides)),
+        client: Some(SettingsClient { name: view.display_name().to_string(), mac, own: overrides.len() }),
+    })
+}
+
+/// A client's own settings, or with `reset` back to the defaults.
+pub(super) async fn save_client_settings(
+    State(state): State<WebState>,
+    admin: Admin,
+    headers: HeaderMap,
+    Path(mac): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    if let Err(r) = admin.check_csrf(&headers, form.get("csrf").map(String::as_str).unwrap_or_default()) {
+        return r;
+    }
+    let thin = &state.veil.thin_clients;
+    let name = match thin.get(&mac) {
+        Ok(Some(view)) => view.display_name().to_string(),
+        Ok(None) => return error_page(StatusCode::NOT_FOUND, "No such thin client", "It may have been removed."),
+        Err(e) => return internal(e),
     };
-    a.iter()
-        .filter(|(k, v)| b.get(*k) != Some(*v))
-        .map(|(k, v)| format!("{k} {} -> {}", show(v), b.get(k).map(show).unwrap_or_default()))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let after = if form.contains_key("reset") {
+        Overrides::new()
+    } else {
+        match parse_fields(&form, true) {
+            Ok(fields) => fields,
+            Err(message) => return error_page(StatusCode::BAD_REQUEST, "Not saved", &message),
+        }
+    };
+    let before = thin.overrides(&mac);
+    if after != before {
+        match thin.set_overrides(&mac, &after) {
+            Ok(true) => {}
+            Ok(false) => return error_page(StatusCode::NOT_FOUND, "No such thin client", "It may have been removed."),
+            Err(e) => return error_page(StatusCode::BAD_REQUEST, "Not saved", &format!("{e:#}.")),
+        }
+        let detail = format!("{mac} ({name}): {}", describe_changes(&before, &after));
+        state.veil.db.audit(&admin.username, "thin client's own settings changed", None, &detail, None);
+    }
+    Redirect::to(&format!("/admin/thin-clients/{mac}/settings?notice=saved")).into_response()
 }
