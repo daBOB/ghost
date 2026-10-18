@@ -164,6 +164,8 @@
 # The desktop's output scale follows the client: its own scale when it
 # streams its whole screen at native resolution, 100% otherwise, or
 # whatever the user picked in spectre-qt's settings (spectre -s). Applied
-# with the output size, on KDE and wlroots desktops; GNOME keeps its own.
+# with the output size on KDE and wlroots desktops, and once the virtual
+# monitor is up on GNOME, as the nearest scale mutter supports for the mode
+# (whole numbers only, unless its fractional scaling is on).
 # false leaves the scale to the desktop's display settings.
 #client_scale = true

@@ -214,6 +214,22 @@ about 10 ms; the desktop sees a mode change. A compositor that can't
 resize keeps its size, the request is declined, and `SessionAccept`
 reports the real size. Nothing relaunches the leader to change size.
 
+The output's scale goes with its size: the client's
+`DisplayDescriptor.scale`, or 100% when it sends none (gdp-spec.md §6.2;
+`[display] client_scale = false` in wraith.toml leaves it alone). KDE
+sets it in the same `kde_output_management_v2` exchange as the mode, after
+it; kwin keeps one scale per output, not per mode, so a scale left by a
+session at another size would otherwise stay. ext sets it on the same
+`zwlr_output_configuration_head_v1` as the mode. GNOME can't, since
+`RecordVirtual` takes no scale and its monitor only appears once the stream
+negotiates: `GnomeRemoteSession` waits for `DisplayConfig.MonitorsChanged`,
+finds the `Meta-` monitor at the session's size in `GetCurrentState`, and
+applies the nearest scale mutter lists for its mode with
+`ApplyMonitorsConfig` (method temporary, so nothing reaches
+`monitors.xml`), once per open so a scale the user then picks stays. A
+scale alone that differs reopens capture like a resize, without the
+encoder.
+
 ## Limitations
 
 - No Hyprland session type (removed with Hyprland 0.56.2). Aquamarine

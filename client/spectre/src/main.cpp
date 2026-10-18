@@ -47,8 +47,8 @@ static void usage(const char *argv0) {
 	printf("  -s scale  the remote desktop's scale, sent with -r and with resolution changes: auto\n");
 	printf("            (default) is this desktop's own scale when the size asked for is this\n");
 	printf("            screen's in pixels, else 100%%; a number (1, 1.5, 2) or percentage (150%%)\n");
-	printf("            sets it. The host applies it on KDE and wlroots desktops, unless it is\n");
-	printf("            configured to leave the scale alone\n");
+	printf("            sets it. The host applies it to its desktop (GNOME, KDE, wlroots), unless\n");
+	printf("            it is configured to leave the scale alone\n");
 	printf("  -A        follow the window: when the window settles at a new size, ask the host\n");
 	printf("            for that resolution. Off by default, when the picture scales to the\n");
 	printf("            window and the resolution changes only from the session menu\n");

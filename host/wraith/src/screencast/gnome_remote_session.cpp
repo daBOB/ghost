@@ -16,8 +16,11 @@
 #include <wayland-server-core.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <ctime>
+#include <string>
+#include <vector>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -34,6 +37,116 @@ constexpr const char *kScPath = "/org/gnome/Mutter/ScreenCast";
 constexpr const char *kScIface = "org.gnome.Mutter.ScreenCast";
 constexpr const char *kScSessionIface = "org.gnome.Mutter.ScreenCast.Session";
 constexpr const char *kScStreamIface = "org.gnome.Mutter.ScreenCast.Stream";
+constexpr const char *kDcService = "org.gnome.Mutter.DisplayConfig";
+constexpr const char *kDcPath = "/org/gnome/Mutter/DisplayConfig";
+constexpr const char *kDcIface = "org.gnome.Mutter.DisplayConfig";
+// ApplyMonitorsConfig's "temporary" method: applied, never written to
+// monitors.xml.
+constexpr uint32_t kDcTemporary = 1;
+
+// What DisplayConfig.GetCurrentState says about the layout, as far as
+// setting one monitor's scale needs.
+struct DisplayState {
+	uint32_t serial = 0;
+	struct Monitor {
+		std::string connector;
+		std::string mode_id; // the current mode's
+		int32_t width = 0, height = 0;
+		std::vector<double> scales; // the current mode's supported scales
+	};
+	std::vector<Monitor> monitors;
+	struct Logical {
+		int32_t x = 0, y = 0;
+		double scale = 1.0;
+		uint32_t transform = 0;
+		int primary = 0;
+		std::vector<std::string> connectors;
+	};
+	std::vector<Logical> logical;
+};
+
+// Reads a{sv} and returns whether `key` is in it with boolean true.
+bool read_flag(sd_bus_message *m, const char *key) {
+	bool found = false;
+	if (sd_bus_message_enter_container(m, 'a', "{sv}") < 0) {
+		return false;
+	}
+	while (sd_bus_message_enter_container(m, 'e', "sv") > 0) {
+		const char *name = nullptr;
+		sd_bus_message_read(m, "s", &name);
+		if (name && strcmp(name, key) == 0 && sd_bus_message_enter_container(m, 'v', "b") > 0) {
+			int value = 0;
+			sd_bus_message_read(m, "b", &value);
+			found = value != 0;
+			sd_bus_message_exit_container(m);
+		} else {
+			sd_bus_message_skip(m, "v");
+		}
+		sd_bus_message_exit_container(m);
+	}
+	sd_bus_message_exit_container(m);
+	return found;
+}
+
+// GetCurrentState's reply, (ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv}).
+bool parse_display_state(sd_bus_message *m, DisplayState *out) {
+	if (sd_bus_message_read(m, "u", &out->serial) < 0 ||
+		sd_bus_message_enter_container(m, 'a', "((ssss)a(siiddada{sv})a{sv})") < 0) {
+		return false;
+	}
+	while (sd_bus_message_enter_container(m, 'r', "(ssss)a(siiddada{sv})a{sv}") > 0) {
+		DisplayState::Monitor monitor;
+		const char *connector = nullptr;
+		sd_bus_message_read(m, "(ssss)", &connector, nullptr, nullptr, nullptr);
+		monitor.connector = connector ? connector : "";
+		sd_bus_message_enter_container(m, 'a', "(siiddada{sv})");
+		while (sd_bus_message_enter_container(m, 'r', "siiddada{sv}") > 0) {
+			const char *id = nullptr;
+			int32_t width = 0, height = 0;
+			double refresh = 0, preferred = 0;
+			sd_bus_message_read(m, "siidd", &id, &width, &height, &refresh, &preferred);
+			std::vector<double> scales;
+			sd_bus_message_enter_container(m, 'a', "d");
+			double scale = 0;
+			while (sd_bus_message_read(m, "d", &scale) > 0) {
+				scales.push_back(scale);
+			}
+			sd_bus_message_exit_container(m);
+			if (read_flag(m, "is-current")) {
+				monitor.mode_id = id ? id : "";
+				monitor.width = width;
+				monitor.height = height;
+				monitor.scales = std::move(scales);
+			}
+			sd_bus_message_exit_container(m);
+		}
+		sd_bus_message_exit_container(m);
+		sd_bus_message_skip(m, "a{sv}");
+		sd_bus_message_exit_container(m);
+		out->monitors.push_back(std::move(monitor));
+	}
+	sd_bus_message_exit_container(m);
+
+	if (sd_bus_message_enter_container(m, 'a', "(iiduba(ssss)a{sv})") < 0) {
+		return false;
+	}
+	while (sd_bus_message_enter_container(m, 'r', "iiduba(ssss)a{sv}") > 0) {
+		DisplayState::Logical logical;
+		sd_bus_message_read(m, "iidub", &logical.x, &logical.y, &logical.scale, &logical.transform,
+			&logical.primary);
+		sd_bus_message_enter_container(m, 'a', "(ssss)");
+		const char *connector = nullptr;
+		while (sd_bus_message_read(m, "(ssss)", &connector, nullptr, nullptr, nullptr) > 0) {
+			logical.connectors.push_back(connector ? connector : "");
+		}
+		sd_bus_message_exit_container(m);
+		sd_bus_message_skip(m, "a{sv}");
+		sd_bus_message_exit_container(m);
+		out->logical.push_back(std::move(logical));
+	}
+	sd_bus_message_exit_container(m);
+	return true;
+}
 
 // The linked stream's PipeWireStreamAdded signal fires synchronously
 // inside RemoteDesktop.Session.Start() in practice, well under 100 ms;
@@ -54,9 +167,113 @@ struct GnomeRemoteSession::Impl {
 
 	sd_bus_slot *node_added_slot = nullptr;
 	sd_bus_slot *closed_slot = nullptr;
+	sd_bus_slot *monitors_slot = nullptr;
 	struct wl_event_source *bus_source = nullptr;
+	// Config::scale, until the virtual monitor it is for exists and has it
+	// (apply_pending_scale()); 0 once done, or when there is none to set.
+	double pending_scale = 0.0;
 
 	std::function<void()> on_closed_cb;
+
+	// RecordVirtual's monitor only appears once the stream negotiates, after
+	// open() returns, so the scale waits for DisplayConfig's MonitorsChanged.
+	static int on_monitors_changed(sd_bus_message *, void *data, sd_bus_error *) {
+		static_cast<Impl *>(data)->apply_pending_scale();
+		return 0;
+	}
+
+	// Sets the virtual monitor (a "Meta-" connector at config's size) to
+	// pending_scale, or the closest scale mutter supports for its mode,
+	// over DisplayConfig.ApplyMonitorsConfig -- the call GNOME Settings
+	// makes, temporary so nothing is saved. Once per open(): a scale the
+	// user changes in the session afterwards stays.
+	void apply_pending_scale() {
+		if (pending_scale <= 0.0) {
+			return;
+		}
+		sd_bus_error error = SD_BUS_ERROR_NULL;
+		sd_bus_message *reply = nullptr;
+		int r = sd_bus_call_method(bus, kDcService, kDcPath, kDcIface, "GetCurrentState", &error, &reply, "");
+		DisplayState state;
+		bool parsed = r >= 0 && parse_display_state(reply, &state);
+		sd_bus_message_unref(reply);
+		if (!parsed) {
+			WLOG_ERROR("screencast: mutter's DisplayConfig.GetCurrentState failed: %s",
+				r < 0 ? sdbus_error_text(error, r) : "unexpected reply");
+			sd_bus_error_free(&error);
+			pending_scale = 0.0;
+			return;
+		}
+		const DisplayState::Monitor *ours = nullptr;
+		for (const auto &monitor : state.monitors) {
+			if (monitor.connector.rfind("Meta-", 0) == 0 && monitor.width == (int32_t)config.width &&
+				monitor.height == (int32_t)config.height) {
+				ours = &monitor;
+			}
+		}
+		if (!ours) {
+			return; // not negotiated yet: the next MonitorsChanged
+		}
+		double scale = pending_scale;
+		pending_scale = 0.0;
+		// mutter takes only the scales it lists for the mode (whole ones
+		// without its fractional scaling, 1.25 and the like with it).
+		double best = 0.0;
+		for (double supported : ours->scales) {
+			if (best == 0.0 || std::fabs(supported - scale) < std::fabs(best - scale)) {
+				best = supported;
+			}
+		}
+		if (best == 0.0) {
+			best = scale;
+		}
+
+		sd_bus_message *m = nullptr;
+		r = sd_bus_message_new_method_call(bus, &m, kDcService, kDcPath, kDcIface, "ApplyMonitorsConfig");
+		r = r >= 0 ? sd_bus_message_append(m, "uu", state.serial, kDcTemporary) : r;
+		r = r >= 0 ? sd_bus_message_open_container(m, 'a', "(iiduba(ssa{sv}))") : r;
+		bool changed = false;
+		for (const auto &logical : state.logical) {
+			bool is_ours = false;
+			for (const std::string &connector : logical.connectors) {
+				is_ours = is_ours || connector == ours->connector;
+			}
+			double logical_scale = is_ours ? best : logical.scale;
+			changed = changed || (is_ours && std::fabs(logical.scale - best) > 1e-3);
+			r = r >= 0 ? sd_bus_message_open_container(m, 'r', "iiduba(ssa{sv})") : r;
+			r = r >= 0 ? sd_bus_message_append(m, "iidub", logical.x, logical.y, logical_scale,
+							 logical.transform, logical.primary)
+					   : r;
+			r = r >= 0 ? sd_bus_message_open_container(m, 'a', "(ssa{sv})") : r;
+			for (const std::string &connector : logical.connectors) {
+				std::string mode_id;
+				for (const auto &monitor : state.monitors) {
+					if (monitor.connector == connector) {
+						mode_id = monitor.mode_id;
+					}
+				}
+				r = r >= 0 ? sd_bus_message_open_container(m, 'r', "ssa{sv}") : r;
+				r = r >= 0 ? sd_bus_message_append(m, "ss", connector.c_str(), mode_id.c_str()) : r;
+				r = r >= 0 ? sdbus_append_no_options(m) : r;
+				r = r >= 0 ? sd_bus_message_close_container(m) : r;
+			}
+			r = r >= 0 ? sd_bus_message_close_container(m) : r; // a(ssa{sv})
+			r = r >= 0 ? sd_bus_message_close_container(m) : r; // the logical monitor
+		}
+		r = r >= 0 ? sd_bus_message_close_container(m) : r;
+		r = r >= 0 ? sdbus_append_no_options(m) : r;
+		if (r >= 0 && changed) {
+			r = sd_bus_call(bus, m, 0, &error, nullptr);
+			if (r < 0) {
+				WLOG_ERROR("screencast: mutter refused a %.0f%% scale for %s: %s", best * 100.0,
+					ours->connector.c_str(), sdbus_error_text(error, r));
+			} else {
+				WLOG_INFO("screencast: mutter's %s at %.0f%%", ours->connector.c_str(), best * 100.0);
+			}
+		}
+		sd_bus_message_unref(m);
+		sd_bus_error_free(&error);
+	}
 
 	static int on_pipewire_stream_added(sd_bus_message *m, void *data, sd_bus_error *) {
 		auto *impl = static_cast<Impl *>(data);
@@ -260,6 +477,11 @@ bool GnomeRemoteSession::open(const Config &config) {
 		kScStreamIface, "PipeWireStreamAdded", Impl::on_pipewire_stream_added, impl_.get());
 	sd_bus_match_signal(impl_->bus, &impl_->closed_slot, kRdService, impl_->rd_path.c_str(), kRdSessionIface,
 		"Closed", Impl::on_session_closed, impl_.get());
+	impl_->pending_scale = config.scale;
+	if (impl_->pending_scale > 0.0) {
+		sd_bus_match_signal(impl_->bus, &impl_->monitors_slot, kDcService, kDcPath, kDcIface, "MonitorsChanged",
+			Impl::on_monitors_changed, impl_.get());
+	}
 
 	if (!impl_->start_session()) {
 		return false;
@@ -296,6 +518,11 @@ void GnomeRemoteSession::close() {
 		sd_bus_slot_unref(impl_->closed_slot);
 		impl_->closed_slot = nullptr;
 	}
+	if (impl_->monitors_slot) {
+		sd_bus_slot_unref(impl_->monitors_slot);
+		impl_->monitors_slot = nullptr;
+	}
+	impl_->pending_scale = 0.0;
 	if (impl_->bus) {
 		sd_bus_unref(impl_->bus);
 		impl_->bus = nullptr;

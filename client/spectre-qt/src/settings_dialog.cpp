@@ -140,7 +140,7 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 	int scale_index = ui->scaleCombo->findData(settings.scale);
 	ui->scaleCombo->setCurrentIndex(scale_index >= 0 ? scale_index : 0);
 	ui->scaleCombo->setToolTip(
-		tr("How the host scales its desktop, on KDE and wlroots desktops. Auto matches this desktop's "
+		tr("How the host scales its desktop (GNOME, KDE and wlroots desktops). Auto matches this desktop's "
 		   "scale when the resolution is this screen's own (Match this display), so the remote desktop "
 		   "looks the same as this one, and uses 100% otherwise. A percentage applies whatever the "
 		   "resolution."));

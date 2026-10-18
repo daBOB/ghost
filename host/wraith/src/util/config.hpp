@@ -155,9 +155,9 @@ struct WraithConfig {
 
 	struct Display {
 		// Set the desktop's output scale from the client's
-		// DisplayDescriptor.scale, 100% when it sends none, on KDE and
-		// wlroots desktops. false leaves the scale to the desktop's own
-		// settings.
+		// DisplayDescriptor.scale, 100% when it sends none (GNOME, KDE and
+		// wlroots desktops; GNOME rounds it to a scale mutter supports).
+		// false leaves the scale to the desktop's own settings.
 		bool client_scale = true;
 	} display;
 };
