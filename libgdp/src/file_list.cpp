@@ -64,14 +64,18 @@ bool entry_of(const fs::directory_entry &de, LocalEntry *entry, bool follow = fa
 	return true;
 }
 
-// Windows reads more into a name than §7.12 rules out: "a:b" is a stream
-// of "a", and CON, NUL, COM1 and the like are devices in any folder.
-bool windows_safe(const std::string &part) {
-#ifdef _WIN32
-	if (part.find(':') != std::string::npos || part.back() == '.' || part.back() == ' ') {
+// What an entry adds to an encoded list: itself, its tag and its length.
+size_t encoded_size(const session::FileListEntry &e) {
+	return e.ByteSizeLong() + 4;
+}
+
+} // namespace
+
+bool windows_safe(const std::string &name) {
+	if (name.empty() || name.find(':') != std::string::npos || name.back() == '.' || name.back() == ' ') {
 		return false;
 	}
-	std::string stem = part.substr(0, part.find('.'));
+	std::string stem = name.substr(0, name.find('.'));
 	for (char &c : stem) {
 		c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
 	}
@@ -84,18 +88,8 @@ bool windows_safe(const std::string &part) {
 		stem[3] <= '9') {
 		return false;
 	}
-#else
-	(void)part;
-#endif
 	return true;
 }
-
-// What an entry adds to an encoded list: itself, its tag and its length.
-size_t encoded_size(const session::FileListEntry &e) {
-	return e.ByteSizeLong() + 4;
-}
-
-} // namespace
 
 session::FileListEntry to_list_entry(const LocalEntry &entry) {
 	session::FileListEntry e;
@@ -301,9 +295,14 @@ std::string resolve_beneath(const std::string &root, const std::string &relative
 	while (start < relative.size()) {
 		size_t slash = relative.find('/', start);
 		std::string part = relative.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-		if (!valid_file_name(part) || !windows_safe(part)) {
+		if (!valid_file_name(part)) {
 			return ""; // empty parts, ".", "..", separators and control characters
 		}
+#ifdef _WIN32
+		if (!windows_safe(part)) {
+			return "";
+		}
+#endif
 		path /= fs_path(part);
 		if (inside_own_mount(utf8_path(path))) {
 			return "";

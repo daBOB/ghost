@@ -133,6 +133,7 @@ add_executable(spectre
   src/net/clipboard_files.cpp
   src/net/file_transfers.cpp
   src/net/host_file_reads.cpp
+  src/net/host_file_tree.cpp
   src/net/local_files.cpp
   src/net/my_folders.cpp
   src/net/session_client.cpp
@@ -262,6 +263,15 @@ target_include_directories(spectre_host_file_reads_test PRIVATE src)
 spectre_warnings(spectre_host_file_reads_test)
 target_link_libraries(spectre_host_file_reads_test PRIVATE gdp Threads::Threads)
 add_test(NAME spectre_host_file_reads_test COMMAND spectre_host_file_reads_test)
+
+add_executable(spectre_host_file_tree_test
+  tests/host_file_tree_test.cpp
+  src/net/host_file_tree.cpp
+)
+target_include_directories(spectre_host_file_tree_test PRIVATE src)
+spectre_warnings(spectre_host_file_tree_test)
+target_link_libraries(spectre_host_file_tree_test PRIVATE gdp)
+add_test(NAME spectre_host_file_tree_test COMMAND spectre_host_file_tree_test)
 
 add_executable(spectre_ui_font_test
   tests/ui_font_test.cpp

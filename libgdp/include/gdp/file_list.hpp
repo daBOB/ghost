@@ -25,6 +25,13 @@ struct LocalEntry {
 	int64_t modified_unix_ms = 0;
 };
 
+// Whether `name`, valid by §7.12 (valid_file_name()), is one Windows can
+// also hold. Windows reads more into a name than §7.12 rules out: "a:b" is
+// a stream of "a", a trailing dot or space is dropped, and CON, NUL, COM1
+// and the like are devices in any folder. The same answer on every
+// platform, for code that names files for Windows.
+bool windows_safe(const std::string &name);
+
 // What `entry` looks like on the wire (parent 0, listed).
 session::FileListEntry to_list_entry(const LocalEntry &entry);
 
