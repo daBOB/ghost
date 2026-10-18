@@ -557,7 +557,11 @@ void SessionClient::handle_datagram(const uint8_t *data, size_t len, uint64_t ar
 	if (hdr.slice_idx == 0) {
 		// The first slice waits behind nothing of its own frame, so its
 		// delay moves with the path's queues rather than with frame size.
-		uint32_t now = (uint32_t)(gdp::monotonic_us() - session_epoch_us_);
+		// When it arrived, not now: it waited behind the decode on this
+		// thread since, and a decoder that can't keep up would read as
+		// network jitter (wraith's auto profile would call a wired LAN
+		// mobile).
+		uint32_t now = (uint32_t)(arrival_us - session_epoch_us_);
 		int32_t delay = gdp::pts_diff(now, hdr.pts);
 		if (receive_.delay_samples == 0 || delay < receive_.delay_min_us) {
 			receive_.delay_min_us = delay;
