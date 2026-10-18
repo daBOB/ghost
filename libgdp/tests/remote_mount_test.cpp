@@ -203,7 +203,7 @@ int main() {
 		step("stat");
 		struct stat st;
 		CHECK(stat((dir + "/clip/big.bin").c_str(), &st) == 0 && st.st_size == (off_t)big.size());
-		CHECK(S_ISREG(st.st_mode) && (st.st_mode & 0777) == 0644 && st.st_mtim.tv_sec == 1700000000);
+		CHECK(S_ISREG(st.st_mode) && (st.st_mode & 0777) == 0644 && st.st_mtime == 1700000000);
 		CHECK(stat((dir + "/clip").c_str(), &st) == 0 && S_ISDIR(st.st_mode));
 		CHECK(stat((dir + "/clip/missing").c_str(), &st) != 0 && errno == ENOENT);
 
@@ -216,12 +216,15 @@ int main() {
 
 		step("read about");
 		// Jumping about (a fresh descriptor; the page cache may answer some).
-		int fd = open((dir + "/clip/big.bin").c_str(), O_RDONLY | O_DIRECT);
+		int fd = -1;
+#ifdef O_DIRECT
+		fd = open((dir + "/clip/big.bin").c_str(), O_RDONLY | O_DIRECT);
+#endif
 		if (fd < 0) {
 			fd = open((dir + "/clip/big.bin").c_str(), O_RDONLY);
 		}
 		char buf[4096];
-		for (uint64_t off : {uint64_t(5) << 20, uint64_t(4096), uint64_t(3) << 20, big.size() - 4096}) {
+		for (uint64_t off : {uint64_t(5) << 20, uint64_t(4096), uint64_t(3) << 20, uint64_t(big.size() - 4096)}) {
 			CHECK(pread(fd, buf, sizeof(buf), (off_t)off) == (ssize_t)sizeof(buf));
 			CHECK(memcmp(buf, big.data() + off, sizeof(buf)) == 0);
 		}
