@@ -167,6 +167,8 @@ if(WIN32)
   # Explorer/taskbar read the .exe file's own icon from a linked-in Win32
   # resource, same as spectre-qt.exe (see its CMakeLists.txt).
   target_sources(spectre PRIVATE resources/app.rc)
+  # The host's copied files on the clipboard as Explorer's virtual files.
+  target_sources(spectre PRIVATE src/net/host_files_clipboard_win.cpp)
 endif()
 
 target_include_directories(spectre PRIVATE src third_party "${SPECTRE_SHADER_GEN_DIR}" "${SPECTRE_ICON_GEN_DIR}")
@@ -197,8 +199,9 @@ else()
   # dxguid: the D3D11_DECODER_PROFILE_* GUIDs codec_support.cpp probes.
   # iphlpapi: the route and interface lookups of lan_link.cpp.
   # shell32: the copied files Explorer puts on the clipboard (CF_HDROP,
-  # clipboard_files.cpp).
-  target_link_libraries(spectre PRIVATE d3d11 dxgi dxguid iphlpapi shell32)
+  # clipboard_files.cpp). ole32, uuid and shell32: the host's copied files
+  # offered to it (host_files_clipboard_win.cpp).
+  target_link_libraries(spectre PRIVATE d3d11 dxgi dxguid iphlpapi shell32 ole32 uuid)
 endif()
 
 if(SPECTRE_FFMPEG_HAS_VULKAN)

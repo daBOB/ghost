@@ -21,6 +21,10 @@
 #include "input/raw_controller.hpp"
 #include "gdp/remote_files.hpp"
 #include "net/file_transfers.hpp"
+#include "net/host_file_reads.hpp"
+#ifdef _WIN32
+#include "net/host_files_clipboard_win.hpp"
+#endif
 #include "net/local_files.hpp"
 #include "net/session_client.hpp"
 #include "present/vulkan_presenter.hpp"
@@ -272,10 +276,16 @@ private:
 	void handle_clipboard_update(const SDL_ClipboardEvent &event);
 	// Copied files across (gdp-spec.md §7.12, file-clipboard): the host's
 	// go into host_files_' FUSE mount and onto the local clipboard as paths
-	// into it; the local user's are announced to the host and read from
-	// here when it pastes them.
+	// into it (on Windows, onto the clipboard as Explorer's virtual files:
+	// host_files_clipboard_); the local user's are announced to the host and
+	// read from here when it pastes them.
 	void on_host_file_list(const gdp::session::FileList &list);
 	void request_host_file(uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset, bool listing);
+	// A "file" stream asking for entry `index` of host list `list_id`: its
+	// bytes from `offset`, or with `listing` what is in the folder. Null if
+	// none can be opened.
+	std::unique_ptr<gdp::Stream> open_host_file_stream(uint64_t list_id, uint32_t index, uint64_t offset,
+		bool listing);
 	void offer_files_on_clipboard(const std::vector<std::string> &paths);
 	const void *clipboard_files_data(const char *mime, size_t *size);
 	// Whether the local clipboard holds copied files, which go to the host
@@ -443,6 +453,22 @@ private:
 	gdp::RemoteFiles host_files_{[this](uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset,
 									 bool listing) { request_host_file(id, target, offset, listing); }};
 	LocalFiles local_files_{[this] { return client_.open_file_stream(); }};
+#ifdef _WIN32
+	// No FUSE: the host's files are read through this, from the clipboard's
+	// own thread. Shared with the clipboard's objects, which Explorer may
+	// hold a little past the session.
+	std::shared_ptr<HostFileReads> host_file_reads_ = std::make_shared<HostFileReads>(
+		[this](uint64_t id, const HostFileReads::Target &target, uint64_t offset, bool listing) {
+			std::unique_ptr<gdp::Stream> stream = open_host_file_stream(target.list_id, target.index, offset, listing);
+			if (stream) {
+				host_file_reads_->answer(id, std::move(stream));
+			} else {
+				host_file_reads_->fail(id);
+			}
+		});
+	// After host_file_reads_, so it goes first.
+	HostFilesClipboard host_files_clipboard_{host_file_reads_};
+#endif
 	Decoder decoder_;
 	VulkanPresenter presenter_;
 	// wraith omits SessionAccept.audio entirely when its own capture failed

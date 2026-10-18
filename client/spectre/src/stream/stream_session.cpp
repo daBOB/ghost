@@ -183,6 +183,11 @@ StreamSession::~StreamSession() {
 		SDL_ClearClipboardData();
 	}
 	host_files_.stop();
+#ifdef _WIN32
+	// A read Explorer is blocked in returns; host_files_clipboard_ then
+	// takes the offer back and ends its thread as it goes.
+	host_file_reads_->close();
+#endif
 	local_files_.cancel_all();
 	decoder_.close();
 	presenter_.shutdown();
@@ -631,6 +636,10 @@ void StreamSession::main_loop() {
 		host_files_.dispatch();
 		local_files_.dispatch();
 		host_files_.tick(gdp::monotonic_us());
+#ifdef _WIN32
+		host_file_reads_->dispatch();
+		host_file_reads_->tick(gdp::monotonic_us());
+#endif
 		present_pending_frame();
 
 		uint64_t now_us = gdp::monotonic_us();
@@ -858,6 +867,10 @@ void StreamSession::on_disconnected(const std::string &reason) {
 		own_files_offer_ = false;
 	}
 	host_files_.stop();
+#ifdef _WIN32
+	host_file_reads_->close(); // a paste under way fails at once
+	host_files_clipboard_.withdraw();
+#endif
 }
 
 bool StreamSession::on_video_frame(const uint8_t *data, size_t len) {
@@ -1378,6 +1391,12 @@ void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
 		// Our own SDL_SetClipboardText or files offer: not a local copy.
 		return;
 	}
+#ifdef _WIN32
+	if (HostFilesClipboard::on_clipboard()) {
+		// The host's files, which OLE rather than SDL put there: no owner.
+		return;
+	}
+#endif
 	own_files_offer_ = false;
 	if (!client_.clipboard_enabled()) {
 		return;
@@ -1400,24 +1419,29 @@ void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
 	SDL_free(text);
 }
 
+#ifndef _WIN32
 namespace {
 
 // Where the host's copied files are mounted: this process's own folder
-// under the user's runtime directory. Empty where there's no FUSE.
+// under the user's runtime directory.
 std::string host_files_directory() {
-#ifdef _WIN32
-	return "";
-#else
 	const char *runtime = getenv("XDG_RUNTIME_DIR");
 	std::string base = runtime && *runtime ? std::string(runtime) + "/spectre"
 										   : "/tmp/spectre-" + std::to_string(getuid());
 	return base + "/" + std::to_string(getpid());
-#endif
 }
 
 } // namespace
+#endif
 
 void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
+#ifdef _WIN32
+	// No FUSE: Explorer's virtual files, read from the host when pasted. A
+	// list with no files leaves what we offered, as below.
+	if (list.files_size() > 0) {
+		host_files_clipboard_.offer(list, client_.file_clipboard_enabled());
+	}
+#else
 	if (!host_files_.running()) {
 		if (list.files_size() == 0 || host_files_failed_) {
 			return;
@@ -1449,6 +1473,7 @@ void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
 		return;
 	}
 	offer_files_on_clipboard(paths);
+#endif
 }
 
 void StreamSession::offer_files_on_clipboard(const std::vector<std::string> &paths) {
@@ -1576,18 +1601,27 @@ void StreamSession::rescan_my_folders() {
 
 void StreamSession::request_host_file(uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset,
 	bool listing) {
-	std::unique_ptr<gdp::Stream> stream = client_.open_file_stream();
+	std::unique_ptr<gdp::Stream> stream = open_host_file_stream(target.list_id, target.index, offset, listing);
 	if (!stream) {
 		host_files_.fail(id, EIO);
 		return;
 	}
+	host_files_.answer(id, std::move(stream));
+}
+
+std::unique_ptr<gdp::Stream> StreamSession::open_host_file_stream(uint64_t list_id, uint32_t index, uint64_t offset,
+	bool listing) {
+	std::unique_ptr<gdp::Stream> stream = client_.open_file_stream();
+	if (!stream) {
+		return nullptr;
+	}
 	gdp::session::FileOpen open;
 	if (listing) {
-		open.mutable_listing()->set_list_id(target.list_id);
-		open.mutable_listing()->set_index(target.index);
+		open.mutable_listing()->set_list_id(list_id);
+		open.mutable_listing()->set_index(index);
 	} else {
-		open.mutable_request()->set_list_id(target.list_id);
-		open.mutable_request()->set_index(target.index);
+		open.mutable_request()->set_list_id(list_id);
+		open.mutable_request()->set_index(index);
 		open.mutable_request()->set_offset(offset);
 	}
 	gdp::session::StreamOpen stream_open;
@@ -1596,7 +1630,7 @@ void StreamSession::request_host_file(uint64_t id, const gdp::RemoteFiles::Targe
 	std::vector<uint8_t> frame;
 	gdp::encode_frame(stream_open, &frame);
 	stream->send(frame.data(), frame.size(), true); // the request is all this side sends
-	host_files_.answer(id, std::move(stream));
+	return stream;
 }
 
 void StreamSession::handle_drop_file(const char *path) {
