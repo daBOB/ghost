@@ -113,7 +113,7 @@ prints this list with no arguments; the logic of each is in
 | `-g` | Forward local gamepads, starting with every one as a virtual Xbox pad. The session menu's Controllers row switches between that and raw. |
 | `-M` | Send this machine's microphone to the host. |
 | `-S folder` | Share a folder with the host, read-only, for the session: it shows up in the host's file manager. Repeatable. |
-| `-F` | Share this machine's files with the host, as `-S` does: every drive on Windows; the home folder and removable drives (`/run/media/$USER`, `/media/$USER`, `/Volumes` on macOS) elsewhere, including drives plugged in during the session. |
+| `-F` | Share this machine's files with the host, as `-S` does: the home folder (the user folder on Windows), then every drive on Windows; the removable drives (`/run/media/$USER`, `/media/$USER`, `/Volumes` on macOS) elsewhere, including drives plugged in during the session. |
 | `-I` | Include hidden files in what `-S` and `-F` share: names starting with a dot, and files marked hidden on Windows and macOS. Left out by default, neither listed nor readable. |
 
 `spectre --probe-decoders` prints each working decode path as

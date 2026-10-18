@@ -157,8 +157,9 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 	ui->shareMyFilesCheck->setChecked(settings.share_my_files);
 #if defined(_WIN32)
 	ui->shareMyFilesCheck->setToolTip(
-		tr("Every drive on this PC (fixed, removable, and optical with a disc in it) shows up in the "
-		   "host's file manager for the session, read-only, the way Remote Desktop shares drives."));
+		tr("Your user folder and every drive on this PC (fixed, removable, and optical with a disc in "
+		   "it) show up in the host's file manager for the session, read-only, the way Remote Desktop "
+		   "shares drives."));
 #else
 	ui->shareMyFilesCheck->setToolTip(
 		tr("Your home folder and the removable drives you have mounted show up in the host's file "

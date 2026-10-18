@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // What "share my files" (spectre -F) shares with the host, as RDP's drive
-// redirection does: on Windows every local drive (fixed, removable or
-// optical with a disc in it); elsewhere the home folder and the removable
+// redirection does: the home folder, then on Windows every local drive
+// (fixed, removable or optical with a disc in it); elsewhere the removable
 // drives mounted for this user (/run/media/$USER, /media/$USER, and
 // /Volumes on macOS). Never the whole filesystem: that is the user's keys
 // and every other user's files, and full of links and devices a share

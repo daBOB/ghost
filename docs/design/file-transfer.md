@@ -230,7 +230,8 @@ gnome-remote-desktop, FreeRDP) and RustDesk's.
   so a slow or hung drive (one of `-F`'s removable ones) never stalls
   the picture or input.
 - **Shared folders** (spectre `-S`, and `-F` for the home folder and
-  removable drives, or every drive on Windows, `my_folders.*`, looked at
+  removable drives, or on Windows the user folder and every drive,
+  `my_folders.*`, looked at
   again every 3 s): `LocalFiles` answers by path, through
   `gdp::resolve_beneath()` (no empty parts, `.`, `..` or symbolic links
   on the way, and unless `-I` nothing hidden: `gdp::hidden_local()`, a

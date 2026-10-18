@@ -8,6 +8,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <knownfolders.h>
+#include <shlobj.h>
 #else
 #include <pwd.h>
 #include <sys/stat.h>
@@ -23,8 +25,35 @@ namespace spectre {
 
 #ifdef _WIN32
 
+namespace {
+
+// The user's profile folder (C:\Users\<name>), UTF-8; empty if Windows
+// won't say.
+std::string home_folder() {
+	PWSTR wide = nullptr;
+	std::string out;
+	if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, KF_FLAG_DEFAULT, nullptr, &wide))) {
+		int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+		if (n > 1) {
+			out.resize(static_cast<size_t>(n));
+			WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), n, nullptr, nullptr);
+			out.resize(static_cast<size_t>(n - 1)); // its NUL
+		}
+	}
+	CoTaskMemFree(wide);
+	return out;
+}
+
+} // namespace
+
 std::vector<MyFolder> my_folders() {
 	std::vector<MyFolder> out;
+	// First, as elsewhere: what the host's user most often wants, without
+	// finding it under Drive C.
+	std::string home = home_folder();
+	if (!home.empty()) {
+		out.push_back({home, "Home"});
+	}
 	// No "insert a disk" dialog for an empty drive.
 	DWORD old_mode = 0;
 	SetThreadErrorMode(SEM_FAILCRITICALERRORS, &old_mode);

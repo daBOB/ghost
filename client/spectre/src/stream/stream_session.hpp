@@ -174,8 +174,8 @@ struct StreamOptions {
 	// Folders to share with the host (spectre -S, repeatable): read-only,
 	// for the session, shown in the host's file manager (file-share).
 	std::vector<std::string> shared_folders;
-	// Share this machine's files too (spectre -F): its drives on Windows,
-	// the home folder and removable drives elsewhere (net/my_folders.hpp).
+	// Share this machine's files too (spectre -F): the home folder, and its
+	// drives on Windows or the removable ones elsewhere (net/my_folders.hpp).
 	bool share_my_files = false;
 	// Include hidden files in what is shared (spectre -I). Off by default:
 	// they are where passwords and keys live.
