@@ -944,6 +944,7 @@ capability is still right.
 | `file` | defined | §7.12, an additional stream kind (§2.2) |
 | `file-clipboard` | defined | §7.12; only with `file` and `clipboard` |
 | `file-share` | defined | §7.12; only with `file` |
+| `security-key` | defined | §8.7 |
 | `usb` | reserved | an additional stream kind (§2.2) |
 
 Anything that changes the meaning of bytes an existing peer already
@@ -1693,6 +1694,9 @@ message InputEnvelope {
     HidInput hid_input = 11;
     HidGetReportReply hid_get_report_reply = 12;
     HidSetReportReply hid_set_report_reply = 13;
+    SecurityKeyConnect security_key_connect = 14;
+    SecurityKeyDisconnect security_key_disconnect = 15;
+    SecurityKeyInput security_key_input = 16;
   }
 }
 ```
@@ -1772,8 +1776,9 @@ ignores it; the reference session agent does.
 
 ### 8.4 Host to client
 
-Under the capability `hid` (§8.6), the host sends toward the client on
-the input stream, one `HostInputEnvelope` per frame:
+Under the capabilities `hid` (§8.6) and `security-key` (§8.7), the host
+sends toward the client on the input stream, one `HostInputEnvelope` per
+frame:
 
 ```protobuf
 message HostInputEnvelope {
@@ -1782,11 +1787,13 @@ message HostInputEnvelope {
     HidOutput hid_output = 2;
     HidGetReport hid_get_report = 3;
     HidSetReport hid_set_report = 4;
+    SecurityKeyRejected security_key_rejected = 5;
+    SecurityKeyOutput security_key_output = 6;
   }
 }
 ```
 
-Without `hid` the host sends nothing on the input stream, and a client
+Without either the host sends nothing on the input stream, and a client
 MUST ignore anything it receives there.
 
 ### 8.5 Gamepads
@@ -1881,9 +1888,10 @@ detaches, as it does gamepads.
 
 A client forwards only game controllers this way: devices its platform's
 game-controller support recognises, never keyboards, mice or security
-keys. While a controller is forwarded raw, the client SHOULD NOT also
-drive it through its own controller support (which may set lights or
-modes of its own); the host's driver owns the device.
+keys (security keys have §8.7). While a controller is forwarded raw,
+the client SHOULD NOT also drive it through its own controller support
+(which may set lights or modes of its own); the host's driver owns the
+device.
 
 **`HidConnect`:** a controller appeared in the slot, raw.
 
@@ -1950,6 +1958,99 @@ behavior:* the reference host's kernel waits 5 seconds. A reply whose
 `hid-steam`, `hid-nintendo`, `hid-generic`, ...) binds to it, and Steam
 or SDL in the session can reach it through `hidraw` as they would a
 local one.
+
+### 8.7 Security keys
+
+Only with `security-key` in effect; a host MUST ignore the messages below
+otherwise, and a client MUST NOT send them.
+
+A client may forward a FIDO security key at its end, so that the
+session's own FIDO clients (a browser signing in to a web page, an SSH
+client with a FIDO key) can use it as one plugged into the host. The
+host creates a HID device with FIDO's usage page, and the two ends relay
+its CTAPHID packets unchanged: the key and the program on the host speak
+CTAP to each other, and neither end interprets it.
+
+A client forwards only a key attached over USB whose HID interface has
+a top-level collection on the FIDO Alliance usage page (`0xF1D0`, usage
+`0x01`) with 64-byte input and output reports and no report IDs, and
+only that interface: never a key's keyboard (OTP) or smartcard
+interface. It MUST NOT forward a key unless its user chose to, and
+SHOULD let them see which keys are forwarded.
+
+A client forwards up to 2 keys, each in a slot `key_index`, 0 or 1,
+separate from the gamepad slots (§8.5). A host MUST ignore a message
+whose `key_index` is 2 or more. A `SecurityKeyConnect` for an occupied
+slot replaces its key. The host removes its keys when the client
+detaches.
+
+**`SecurityKeyConnect`:** a key appeared in the slot.
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `key_index` | uint32 | The slot. |
+| 2 | `name` | string | The key's product name, as its platform reports it. At most 128 bytes. |
+| 3 | `vendor_id` | uint32 | USB vendor ID. |
+| 4 | `product_id` | uint32 | USB product ID. |
+| 5 | `version` | uint32 | Release number (`bcdDevice`). |
+
+The client sends no report descriptor and no serial number: every key
+has the same descriptor, and the host presents its own (below).
+
+**`SecurityKeyDisconnect`** (field `key_index` 1, uint32): the slot's key
+went away, or its user stopped forwarding it. A disconnect for an empty
+slot is ignored.
+
+**`SecurityKeyRejected`** (host → client; fields `key_index` 1, uint32;
+`reason` 2, string): the host will not, or could not, present the key,
+and the slot is empty again. `reason` is for logs.
+
+**`SecurityKeyInput`** (fields `key_index` 1, uint32; `data` 2, bytes):
+one CTAPHID packet from the key, exactly 64 bytes, without a report ID.
+A host MUST ignore one of any other length, and one for an empty slot.
+
+**`SecurityKeyOutput`** (host → client; fields `key_index` 1, uint32;
+`data` 2, bytes): one CTAPHID packet for the key, exactly 64 bytes,
+without a report ID. The client writes it to the key (on platforms
+whose HID API wants a report ID first, preceded by 0).
+
+Packets are relayed in order and never merged, split or answered by
+either end: CTAPHID's own channels, keep-alives and timeouts work across
+the relay as they do locally, a few round trips per sign-in.
+
+The client SHOULD show its user which site a request is for. The CTAP2
+requests that need the user's touch, `authenticatorMakeCredential` and
+`authenticatorGetAssertion`, name the relying party's ID in clear in
+their `CTAPHID_CBOR` message, which the client can reassemble from the
+host's packets; a U2F (`CTAPHID_MSG`) request carries only a hash of it,
+and the client can say only that a request is waiting.
+
+*Host behavior:* the reference host creates the device through Linux's
+`uhid`, on bus USB, with the key's name and IDs and this descriptor,
+whatever the key's own:
+
+```
+06 D0 F1   Usage Page (FIDO Alliance)
+09 01      Usage (CTAPHID)
+A1 01      Collection (Application)
+09 20        Usage (Input Report Data)
+15 00        Logical Minimum (0)
+26 FF 00     Logical Maximum (255)
+75 08        Report Size (8)
+95 40        Report Count (64)
+81 02        Input (Data, Var, Abs)
+09 21        Usage (Output Report Data)
+15 00        Logical Minimum (0)
+26 FF 00     Logical Maximum (255)
+75 08        Report Size (8)
+95 40        Report Count (64)
+91 02        Output (Data, Var, Abs)
+C0         End Collection
+```
+
+`hid-generic` binds to it and creates a `hidraw` node, which the
+session's FIDO clients find by its usage page; the host fails any
+GET_REPORT or SET_REPORT itself, since CTAPHID uses neither.
 
 ---
 
@@ -2629,7 +2730,8 @@ peer. Receivers MUST bound what they allocate from them: frame lengths
 (§3.1), slice counts (§9.3), refinement tile areas (§9.5, 64 MiB),
 cursor images (§7.4, 384 pixels a side), clipboard data (§7.9, 1 MiB −
 1 KiB), gamepad slots and arrays (§8.5), HID descriptors and reports
-(§8.6, 4096 bytes), a file's opening frame (§7.12, 4096 bytes). A
+(§8.6, 4096 bytes), security-key packets and names (§8.7, 64 and 128
+bytes), a file's opening frame (§7.12, 4096 bytes). A
 `FileOffer.size` says how much is coming, not how much to allocate.
 Gamepad names and `client_id` are for logs only.
 
@@ -2671,7 +2773,24 @@ describes. *Host behavior:* the reference host accepts only USB and
 Bluetooth, binds only drivers on a short allowlist, and destroys a
 device as soon as any input device it produced reports a key below
 `BTN_MISC`, a key outside the gamepad ranges, relative motion, a switch
-or a sound. The reference
+or a sound.
+
+**Security keys.** `security-key` (§8.7) gives every process of the
+session's user the client's key for as long as it is forwarded: any of
+them can ask it to sign in to any site, and the user's touch is the only
+thing that grants a request. The origin a signature is bound to is
+whatever the host's browser says it is. A client therefore forwards a
+key only when its user chose to, and SHOULD show the relying party each
+request names, so that a touch answers a request the user can see. A
+host MUST NOT let a forwarded key become anything but a FIDO HID
+device: it MUST present a descriptor of its own rather than the
+client's, and MUST check the devices its drivers create, as for raw
+controllers. *Host behavior:* the reference host destroys the device if
+any driver but `hid-generic` binds, or if it creates an input device.
+A PIN typed on the host crosses the relay encrypted to the key (CTAP2's
+PIN protocol).
+
+The reference
 implementation fuzzes its datagram, refinement-container and control
 parsers.
 
@@ -2712,6 +2831,7 @@ either side to the other; a client SHOULD let its user turn it off.
 | Gamepad slots; axes; buttons | 4; 6; 26 | §8.5 |
 | HID report descriptor; report | 4096 bytes; 4096 bytes | §8.6 |
 | HID request timeout (reference host) | 5 s | §8.6 |
+| Security-key slots; packet; name | 2; 64 bytes; 128 bytes | §8.7 |
 | Video header | 16 bytes (+1 channel) | §9.1 |
 | Slice payload before the path is known | 1100 bytes | §9.2 |
 | `host_lat` unit; maximum | 10 µs; 0xFFFF | §9.1 |
