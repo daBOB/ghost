@@ -347,6 +347,9 @@ private:
 	// The host refused or failed slot `i`'s key (SecurityKeyRejected): not
 	// tried again until it is unplugged.
 	void on_security_key_rejected(uint32_t i, const std::string &reason);
+	// One packet the host sent slot `i`'s key, before it goes to the key:
+	// tells the user which site a touch would approve.
+	void note_security_key_request(uint32_t i, const std::string &packet);
 	// Any axis/button event: marks the slot so flush_gamepads() sends one
 	// snapshot for it, however many SDL events the poll batch held.
 	void mark_gamepad_dirty(uint32_t instance_id);
@@ -721,6 +724,9 @@ private:
 	// Forwarded security keys, one per wire slot (SecurityKeyConnect.
 	// key_index); after client_, so their threads stop before it goes.
 	std::unique_ptr<SecurityKey> keys_[gdp::kMaxSecurityKeys];
+	// What the host's packets for each key ask it (gdp-spec.md §8.7's
+	// notice): the site a touch would approve, shown as a toast.
+	gdp::KeyRequestWatcher key_requests_[gdp::kMaxSecurityKeys];
 	// Keys the host refused or that couldn't be opened, by path: left
 	// alone until they're unplugged, rather than retried every rescan.
 	std::set<std::string> refused_keys_;

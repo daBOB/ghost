@@ -3,6 +3,9 @@
 
 #include "gdp/security_key.hpp"
 
+#include <algorithm>
+#include <cstring>
+
 namespace gdp {
 
 bool is_ctaphid_descriptor(const uint8_t *rd, size_t len) {
@@ -86,6 +89,262 @@ bool is_ctaphid_descriptor(const uint8_t *rd, size_t len) {
 		}
 	}
 	return found && depth == 0 && input_bits == kPacketBits && output_bits == kPacketBits;
+}
+
+namespace {
+
+// CTAPHID (FIDO CTAP 2.1 §11.2.4): an initialization packet is the
+// channel, a command with its top bit set and a big-endian length, then
+// 57 bytes; each continuation packet is the channel, a sequence number
+// below 0x80, then 59 bytes. A message is at most 57 + 128 * 59 bytes.
+constexpr uint8_t kCmdMsg = 0x83;  // U2F APDU
+constexpr uint8_t kCmdCbor = 0x90; // CTAP2
+constexpr size_t kInitData = 57;
+constexpr size_t kContData = 59;
+constexpr size_t kMaxMessage = kInitData + 128 * kContData;
+// Channels being reassembled at once; a browser uses one or two.
+constexpr size_t kMaxChannels = 8;
+
+constexpr uint8_t kMakeCredential = 0x01;
+constexpr uint8_t kGetAssertion = 0x02;
+constexpr uint8_t kSelection = 0x0b;
+// U2F APDU instructions.
+constexpr uint8_t kU2fRegister = 0x01;
+constexpr uint8_t kU2fAuthenticate = 0x02;
+// U2F authenticate's control byte that only checks a key handle, with no
+// touch.
+constexpr uint8_t kU2fCheckOnly = 0x07;
+
+// Just enough CBOR (RFC 8949) to find a few keys in a CTAP request's map
+// and step over everything else.
+class Cbor {
+public:
+	Cbor(const uint8_t *p, size_t n) : p_(p), end_(p + n) {}
+	bool head(uint8_t *major, uint64_t *value) {
+		if (p_ >= end_) {
+			return false;
+		}
+		uint8_t b = *p_++;
+		*major = b >> 5;
+		uint8_t info = b & 0x1f;
+		if (info < 24) {
+			*value = info;
+			return true;
+		}
+		if (info > 27) {
+			return false; // indefinite lengths: CTAP's canonical CBOR has none
+		}
+		size_t bytes = size_t(1) << (info - 24);
+		if ((size_t)(end_ - p_) < bytes) {
+			return false;
+		}
+		*value = 0;
+		for (size_t i = 0; i < bytes; i++) {
+			*value = (*value << 8) | *p_++;
+		}
+		return true;
+	}
+	bool text(std::string *out) {
+		uint8_t major;
+		uint64_t len;
+		if (!head(&major, &len) || major != 3 || len > (uint64_t)(end_ - p_)) {
+			return false;
+		}
+		out->assign(reinterpret_cast<const char *>(p_), (size_t)len);
+		p_ += len;
+		return true;
+	}
+	bool skip(int depth = 0) {
+		uint8_t major;
+		uint64_t value;
+		if (depth > 8 || !head(&major, &value)) {
+			return false;
+		}
+		switch (major) {
+		case 2:
+		case 3:
+			if (value > (uint64_t)(end_ - p_)) {
+				return false;
+			}
+			p_ += value;
+			return true;
+		case 4:
+		case 5:
+			for (uint64_t i = 0; i < value * (major == 5 ? 2 : 1); i++) {
+				if (!skip(depth + 1)) {
+					return false;
+				}
+			}
+			return true;
+		case 6: return skip(depth + 1);
+		default: return true; // integers, simple values, floats: the head was all
+		}
+	}
+	// A map's entries: `on_entry(key)` reads or skips the value and says
+	// whether to go on. Integer keys, as CTAP's requests use; a text key
+	// (inside rp, options) is passed as -1 with the text in *text_key.
+	template <typename F> bool map(F &&on_entry, std::string *text_key = nullptr) {
+		uint8_t major;
+		uint64_t count;
+		if (!head(&major, &count) || major != 5) {
+			return false;
+		}
+		for (uint64_t i = 0; i < count; i++) {
+			uint8_t key_major;
+			uint64_t key;
+			const uint8_t *at = p_;
+			if (!head(&key_major, &key)) {
+				return false;
+			}
+			int64_t k = (int64_t)key;
+			if (key_major == 3 && text_key) {
+				p_ = at;
+				if (!text(text_key)) {
+					return false;
+				}
+				k = -1;
+			} else if (key_major != 0) {
+				return false;
+			}
+			if (!on_entry(k)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	bool boolean(bool *out) {
+		if (p_ >= end_ || (*p_ != 0xf4 && *p_ != 0xf5)) {
+			return false;
+		}
+		*out = *p_++ == 0xf5;
+		return true;
+	}
+
+private:
+	const uint8_t *p_;
+	const uint8_t *end_;
+};
+
+} // namespace
+
+bool KeyRequestWatcher::feed(const uint8_t *packet, size_t len, KeyRequest *request) {
+	if (len != kSecurityKeyPacket) {
+		return false;
+	}
+	uint32_t cid =
+		(uint32_t(packet[0]) << 24) | (uint32_t(packet[1]) << 16) | (uint32_t(packet[2]) << 8) | packet[3];
+	if (packet[4] & 0x80) {
+		Message m;
+		m.cmd = packet[4];
+		m.total = (size_t(packet[5]) << 8) | packet[6];
+		if (m.total > kMaxMessage) {
+			channels_.erase(cid);
+			return false;
+		}
+		m.data.assign(packet + 7, packet + 7 + std::min(m.total, kInitData));
+		if (m.data.size() == m.total) {
+			channels_.erase(cid);
+			return complete(m, request);
+		}
+		if (channels_.size() >= kMaxChannels && !channels_.count(cid)) {
+			channels_.erase(channels_.begin());
+		}
+		channels_[cid] = std::move(m);
+		return false;
+	}
+	auto it = channels_.find(cid);
+	if (it == channels_.end()) {
+		return false;
+	}
+	Message &m = it->second;
+	if (packet[4] != m.next_seq) {
+		channels_.erase(it);
+		return false;
+	}
+	m.next_seq++;
+	size_t take = std::min(m.total - m.data.size(), kContData);
+	m.data.insert(m.data.end(), packet + 5, packet + 5 + take);
+	if (m.data.size() < m.total) {
+		return false;
+	}
+	Message done = std::move(m);
+	channels_.erase(it);
+	return complete(done, request);
+}
+
+bool KeyRequestWatcher::complete(const Message &m, KeyRequest *request) const {
+	if (m.data.empty()) {
+		return false;
+	}
+	if (m.cmd == kCmdMsg) {
+		// An APDU: CLA INS P1 ... ; authenticate's P1 says whether it wants
+		// the user present.
+		if (m.data.size() < 3) {
+			return false;
+		}
+		uint8_t ins = m.data[1];
+		if (ins == kU2fRegister || (ins == kU2fAuthenticate && m.data[2] != kU2fCheckOnly)) {
+			*request = KeyRequest{KeyRequest::kU2f, {}};
+			return true;
+		}
+		return false;
+	}
+	if (m.cmd != kCmdCbor) {
+		return false;
+	}
+	uint8_t command = m.data[0];
+	if (command == kSelection) {
+		*request = KeyRequest{KeyRequest::kSelect, {}};
+		return true;
+	}
+	if (command != kMakeCredential && command != kGetAssertion) {
+		return false;
+	}
+	Cbor cbor(m.data.data() + 1, m.data.size() - 1);
+	std::string rp_id;
+	bool user_presence = true;
+	std::string key;
+	bool ok = cbor.map([&](int64_t k) {
+		if (command == kMakeCredential && k == 0x02) {
+			// rp: {"id": text, "name": text, ...}
+			std::string field;
+			return cbor.map(
+				[&](int64_t) {
+					if (field == "id") {
+						return cbor.text(&rp_id);
+					}
+					return cbor.skip();
+				},
+				&field);
+		}
+		if (command == kGetAssertion && k == 0x01) {
+			return cbor.text(&rp_id);
+		}
+		if (command == kGetAssertion && k == 0x05) {
+			// options: {"up": bool, "uv": bool}
+			std::string field;
+			return cbor.map(
+				[&](int64_t) {
+					if (field == "up") {
+						return cbor.boolean(&user_presence);
+					}
+					return cbor.skip();
+				},
+				&field);
+		}
+		return cbor.skip();
+	});
+	if (!ok || rp_id.empty() || !user_presence) {
+		return false;
+	}
+	// Chrome and Firefox ask the user to pick a key by registering with a
+	// placeholder relying party no site has.
+	if (command == kMakeCredential && rp_id == ".dummy") {
+		*request = KeyRequest{KeyRequest::kSelect, {}};
+		return true;
+	}
+	*request = KeyRequest{command == kMakeCredential ? KeyRequest::kRegister : KeyRequest::kSignIn, rp_id};
+	return true;
 }
 
 } // namespace gdp
