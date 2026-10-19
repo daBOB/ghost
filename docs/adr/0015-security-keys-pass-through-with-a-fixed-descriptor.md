@@ -1,6 +1,6 @@
 # 0015. Security keys pass through with a fixed descriptor
 
-Status: Proposed (2026-10-18)
+Status: Accepted (2026-10-18)
 
 ## Context
 

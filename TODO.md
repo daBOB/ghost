@@ -63,6 +63,18 @@ Limitations section.
 
 ## Client
 
+- Security keys (gdp-spec.md §8.7, ADR 0015) are tested end to end on
+  Linux only, spectre and the session on one host (a YubiKey 5, Chrome
+  sign-in on webauthn.io). Untested: a Wisp thin client (whether the
+  kiosk user can open the key's hidraw node), macOS's IOHID path, a key
+  unplugged and replugged mid-session, two keys at once, and a session
+  through Veil's gateway.
+- Security keys on Windows: spectre can't open a FIDO HID device without
+  elevation (Windows 10 1903 on). Plan (ADR 0015): a helper service the
+  installer adds, as LocalSystem, that opens the keys and relays their
+  packets to spectre over a named pipe only the session's user may open;
+  check first that it coexists with Windows' own WebAuthn service.
+  Until then `-U` finds keys there but can't open them.
 - Raw controllers (gdp-spec.md §8.6) are untested end to end: a PS4 pad
   over Bluetooth (touchpad, motion, light bar, rumble, Steam Input), a
   Steam Controller, a Switch Pro pad (does `hid-nintendo` pass ghostd's
