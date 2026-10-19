@@ -65,6 +65,10 @@ bool is_ghost_virtual_key(const std::string &path) {
 
 std::vector<SecurityKey::Identity> SecurityKey::find() {
 	std::vector<Identity> keys;
+	// SDL lists only game controllers unless told otherwise. The hint only
+	// filters what SDL_hid_enumerate() returns: SDL's own controller
+	// drivers check each device themselves.
+	SDL_SetHint(SDL_HINT_HIDAPI_ENUMERATE_ONLY_CONTROLLERS, "0");
 	SDL_hid_device_info *list = SDL_hid_enumerate(0, 0);
 	for (SDL_hid_device_info *info = list; info; info = info->next) {
 		if (info->usage_page != gdp::kFidoUsagePage || info->usage != gdp::kFidoUsageCtaphid ||
