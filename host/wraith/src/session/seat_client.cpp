@@ -237,16 +237,16 @@ int SeatClient::create_device(const std::string &socket_path, ghost::control::Cr
 	return client.request_device(request, &reader, node, error);
 }
 
-int SeatClient::create_hid_device(const std::string &socket_path, uint32_t index, const std::string &name,
-	const ghost::control::HidIdentity &identity, std::string *node, int *conn_fd, gdp::FrameReader *reader,
-	std::string *error) {
+int SeatClient::create_hid_device(const std::string &socket_path, ghost::control::CreateDevice::Kind kind,
+	uint32_t index, const std::string &name, const ghost::control::HidIdentity &identity, std::string *node,
+	int *conn_fd, gdp::FrameReader *reader, std::string *error) {
 	SeatClient client;
 	if (!client.connect_raw(socket_path, error)) {
 		return -1;
 	}
 	ghost::control::ControlEnvelope request;
 	auto *create = request.mutable_create_device();
-	create->set_kind(ghost::control::CreateDevice::KIND_HID);
+	create->set_kind(kind);
 	create->set_index(index);
 	create->set_name(name);
 	*create->mutable_hid() = identity;

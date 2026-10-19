@@ -2867,6 +2867,7 @@ every implementation listed for it.
 | Lists, folder contents and shared paths | `libgdp/include/gdp/file_list.hpp` |
 | Mounting the other end's files (FUSE) | `libgdp/include/gdp/remote_files.hpp`, `remote_mount.hpp`; `host/wraith/src/session/client_files.cpp`; `client/spectre/src/net/local_files.cpp` |
 | Gamepad order | `libgdp/include/gdp/gamepad.hpp` |
+| Security keys (§8.7) | `libgdp/include/gdp/security_key.hpp`; `host/ghostseat/src/devices.rs` (the device and its policy); `host/wraith/src/session/security_keys.cpp` (the relay) |
 | Session clock | `libgdp/include/gdp/clock.hpp` |
 | Error codes | `libgdp/include/gdp/error_codes.hpp` (pinned by `error_codes_test`); `LobbyErrorCode` in `lobby.proto`; `host/veil/app/session.js` |
 | Fingerprints, CA checks | `libgdp/include/gdp/cert_fingerprint.hpp`; `CaTrust` in `transport.hpp`; `host/veil/src/lobby_tls.rs` (which certificate the broker presents) |

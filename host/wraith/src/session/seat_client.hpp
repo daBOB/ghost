@@ -95,17 +95,19 @@ public:
 	static int create_device(const std::string &socket_path, ghost::control::CreateDevice::Kind kind,
 		uint32_t index, const std::string &name, std::string *node, std::string *error);
 
-	// The same for a raw controller (KIND_HID, gdp-spec.md §8.6): `name`
-	// and `identity` become the uhid device's, and the fd carries uhid
-	// events both ways, one per read() or write(). ghostseat sends the
+	// The same for a raw controller (KIND_HID, gdp-spec.md §8.6) or a
+	// security key (KIND_SECURITY_KEY, §8.7): `name` and `identity` become
+	// the uhid device's (a key's identity carries only its IDs; ghostseat
+	// supplies the rest), and the fd carries uhid events both ways, one
+	// per read() or write(). ghostseat sends the
 	// verdict on its driver later on the same connection (DeviceVerified,
 	// or a ControlError once it has destroyed the device), so on success
 	// the connection stays open: `*conn_fd` gets it, for the caller to
 	// watch and close, and `*reader` holds whatever was read past
 	// DeviceCreated -- the verdict itself, if ghostseat was quick.
-	static int create_hid_device(const std::string &socket_path, uint32_t index, const std::string &name,
-		const ghost::control::HidIdentity &identity, std::string *node, int *conn_fd,
-		gdp::FrameReader *reader, std::string *error);
+	static int create_hid_device(const std::string &socket_path, ghost::control::CreateDevice::Kind kind,
+		uint32_t index, const std::string &name, const ghost::control::HidIdentity &identity,
+		std::string *node, int *conn_fd, gdp::FrameReader *reader, std::string *error);
 
 	// Reports that this session's viewer attached or detached
 	// (ViewerAttached/ViewerDetached, host/proto/control.proto): a fresh

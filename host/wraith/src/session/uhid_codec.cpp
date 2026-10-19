@@ -109,4 +109,13 @@ std::vector<uint8_t> set_report_reply(uint32_t id, uint16_t err) {
 	return ev;
 }
 
+bool fido_packet(const Event &ev, uint8_t packet[64]) {
+	if (ev.type != kOutput || ev.size < 1 || ev.data[0] != 0 || ev.size - 1 > 64) {
+		return false;
+	}
+	std::memset(packet, 0, 64);
+	std::memcpy(packet, ev.data + 1, ev.size - 1);
+	return true;
+}
+
 } // namespace wraith::uhid

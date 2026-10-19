@@ -92,6 +92,37 @@ int main() {
 	// Too short for what the type promises.
 	CHECK(!uhid::parse(reinterpret_cast<const uint8_t *>(&req), 8, &parsed));
 
+	// A security key's output report, as hidraw hands it over: report ID
+	// 0 first, then the packet; a short one is zero-padded.
+	uhid_event key_out{};
+	key_out.type = UHID_OUTPUT;
+	key_out.u.output.size = 65;
+	key_out.u.output.rtype = UHID_OUTPUT_REPORT;
+	for (int i = 1; i < 65; i++) {
+		key_out.u.output.data[i] = (uint8_t)i;
+	}
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&key_out), sizeof(key_out), &parsed));
+	uint8_t packet[64];
+	CHECK(uhid::fido_packet(parsed, packet));
+	CHECK(packet[0] == 1 && packet[63] == 64);
+	key_out.u.output.size = 9;
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&key_out), sizeof(key_out), &parsed));
+	CHECK(uhid::fido_packet(parsed, packet));
+	CHECK(packet[7] == 8 && packet[8] == 0 && packet[63] == 0);
+	// More than a packet, a numbered report, nothing at all, not an output.
+	key_out.u.output.size = 66;
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&key_out), sizeof(key_out), &parsed));
+	CHECK(!uhid::fido_packet(parsed, packet));
+	key_out.u.output.size = 65;
+	key_out.u.output.data[0] = 3;
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&key_out), sizeof(key_out), &parsed));
+	CHECK(!uhid::fido_packet(parsed, packet));
+	key_out.u.output.size = 0;
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&key_out), sizeof(key_out), &parsed));
+	CHECK(!uhid::fido_packet(parsed, packet));
+	CHECK(uhid::parse(reinterpret_cast<const uint8_t *>(&req), sizeof(req), &parsed));
+	CHECK(!uhid::fido_packet(parsed, packet));
+
 	if (g_failures) {
 		fprintf(stderr, "%d failure(s)\n", g_failures);
 		return 1;

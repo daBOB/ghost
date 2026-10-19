@@ -371,7 +371,8 @@ int main(int argc, char *argv[]) {
 			WLOG_INFO("gamepad: ghostd reports no uinput support on this host -- standard gamepads disabled");
 		}
 		if (!seat_init.uhid_available) {
-			WLOG_INFO("hid: ghostd reports no uhid support on this host -- raw controllers disabled");
+			WLOG_INFO("hid: ghostd reports no uhid support on this host -- raw controllers and security keys "
+					  "disabled");
 		}
 		// First free port in ghostd's range.
 		// Only "already in use" moves on to the next one: anything else
