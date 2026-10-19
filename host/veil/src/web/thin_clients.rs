@@ -398,6 +398,12 @@ fn sections() -> Vec<Section> {
                     Kind::Flag,
                 ),
                 field(
+                    "refuse_key_maintenance",
+                    "Refuse security key maintenance",
+                    "With security keys forwarded: refuse the host's requests to reset a key, change its PIN, manage its passkeys or fingerprints, or change its settings, without asking. Off, the client asks its user about each one, and the key gets it only if they allow it.",
+                    Kind::Flag,
+                ),
+                field(
                     "microphone",
                     "Send microphone",
                     "Send the client's microphone to the host, where applications see it as a microphone, if the host supports it. Off by default.",

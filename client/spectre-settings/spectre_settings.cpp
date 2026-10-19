@@ -59,6 +59,9 @@ QStringList SpectreSettings::to_args(const QScreen *screen, bool debug) const {
 	}
 	if (forward_security_keys) {
 		args << "-U";
+		if (refuse_key_maintenance) {
+			args << "-u";
+		}
 	}
 	if (microphone) {
 		args << "-M";

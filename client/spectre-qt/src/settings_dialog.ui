@@ -245,6 +245,18 @@
           </widget>
          </item>
          <item>
+          <widget class="QCheckBox" name="keyMaintenanceCheck">
+           <property name="text">
+            <string>Refuse security key maintenance</string>
+           </property>
+           <property name="toolTip">
+            <string>Refuse the host's requests to reset a forwarded key, change its PIN, manage its
+   passkeys or fingerprints, or change its settings, without asking. Unticked, spectre
+   asks you about each one, and the key gets it only if you allow it.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QCheckBox" name="microphoneCheck">
            <property name="text">
             <string>Send microphone</string>

@@ -144,7 +144,186 @@ Bytes make_credential(const std::string &rp) {
 
 } // namespace
 
+// The last verdict of a message held for consent: nothing reached the key
+// or the host.
+bool asked(gdp::KeyPolicy &w, const std::vector<Bytes> &ps, uint64_t now, gdp::KeyVerdict *v) {
+	for (const Bytes &p : ps) {
+		w.feed(p.data(), p.size(), now, v);
+		assert(v->to_key.empty() && v->to_host.empty());
+	}
+	return v->ask;
+}
+
+Bytes cm(uint64_t sub) {
+	return cat({{0x0a}, map(1, {cint(1), cint(sub)})});
+}
+
+void test_consent() {
+	const uint64_t t0 = 1000000000;
+	gdp::KeyVerdict v;
+
+	// What's asked about, and what kind of consent each is.
+	struct Case {
+		Bytes msg;
+		gdp::KeyConsent::Kind kind;
+	};
+	const Case cases[] = {
+		{client_pin(3), gdp::KeyConsent::kSetPin},
+		{client_pin(4), gdp::KeyConsent::kChangePin},
+		{cm(1), gdp::KeyConsent::kListCredentials},
+		{cm(2), gdp::KeyConsent::kListCredentials},
+		{cm(6), gdp::KeyConsent::kDeleteCredential},
+		{cm(7), gdp::KeyConsent::kUpdateUser},
+		{cat({{0x09}, map(1, {cint(2), cint(4)})}), gdp::KeyConsent::kListFingerprints},
+		{cat({{0x09}, map(1, {cint(2), cint(1)})}), gdp::KeyConsent::kEnrolFingerprint},
+		{cat({{0x40}, map(1, {cint(2), cint(6)})}), gdp::KeyConsent::kRemoveFingerprint},
+		{cat({{0x09}, map(1, {cint(2), cint(5)})}), gdp::KeyConsent::kRenameFingerprint},
+		{cat({{0x0d}, map(1, {cint(1), cint(2)})}), gdp::KeyConsent::kAlwaysUv},
+		{cat({{0x0d}, map(1, {cint(1), cint(3)})}), gdp::KeyConsent::kMinPinLength},
+		{cat({{0x0d}, map(1, {cint(1), cint(1)})}), gdp::KeyConsent::kEnterpriseAttestation},
+		{{0x07}, gdp::KeyConsent::kReset},
+	};
+	for (const Case &c : cases) {
+		gdp::KeyPolicy w(t0, true);
+		std::vector<Bytes> ps = packets(7, 0x90, c.msg);
+		assert(asked(w, ps, t0 + 1000000, &v));
+		assert(v.held_cid == 7 && v.consent.kind == c.kind && w.holding());
+		gdp::KeyConsentText prompt = gdp::describe_consent(v.consent, "YubiKey 5C NFC");
+		assert(!prompt.title.empty() && prompt.body.find("YubiKey 5C NFC") != std::string::npos);
+		// While held, the host is told the key is waiting for its user.
+		std::vector<gdp::KeyPacket> ka = w.keepalives();
+		assert(ka.size() == 1 && ka[0][3] == 7 && ka[0][4] == 0xbb && ka[0][6] == 1 && ka[0][7] == 0x02);
+		// Approved: the message goes to the key whole, as the host sent it.
+		w.approve(7, t0 + 2000000, &v);
+		assert(v.to_key.size() == ps.size() && v.to_host.empty() && !w.holding());
+		assert(std::equal(ps[0].begin(), ps[0].end(), v.to_key[0].begin()));
+		// Denied, on a fresh policy (an approved listing covers what follows
+		// it): refused in the key's place.
+		gdp::KeyPolicy d(t0, true);
+		assert(asked(d, ps, t0 + 1000000, &v));
+		d.deny(7, &v);
+		assert(
+			v.to_key.empty() && v.to_host.size() == 1 && v.to_host[0][4] == 0x90 && v.to_host[0][7] == 0x27);
+		// Answering again changes nothing.
+		d.approve(7, t0 + 4000000, &v);
+		assert(v.to_key.empty() && v.to_host.empty());
+	}
+
+	// Reset: asked about only within the window after the key appeared.
+	{
+		gdp::KeyPolicy w(t0, true);
+		std::string what;
+		assert(asked(w, packets(1, 0x90, {0x07}), t0 + gdp::KeyPolicy::kResetWindowUs, &v));
+		w.deny(1, &v);
+		w.feed(packets(1, 0x90, {0x07})[0].data(), 64, t0 + gdp::KeyPolicy::kResetWindowUs + 1, &v);
+		assert(v.refused && v.refused_what == "reset it" && !v.refused_why.empty() && v.to_host.size() == 1);
+	}
+
+	// Maintenance off: refused outright, no consent asked.
+	{
+		gdp::KeyPolicy w(t0, false);
+		w.feed(packets(1, 0x90, client_pin(3))[0].data(), 64, t0, &v);
+		assert(!v.ask && v.refused && v.refused_what == "set its PIN" && v.to_host.size() == 1);
+		w.feed(packets(1, 0x90, cm(2))[0].data(), 64, t0, &v);
+		assert(!v.ask && v.refused);
+	}
+
+	// A CANCEL of a held request: withdrawn, answered as the key would, and
+	// kept from the key. A new message on the channel withdraws it too.
+	{
+		gdp::KeyPolicy w(t0, true);
+		assert(asked(w, packets(3, 0x90, client_pin(4)), t0, &v));
+		w.feed(packets(3, 0x91, {})[0].data(), 64, t0, &v);
+		assert(v.withdrawn.size() == 1 && v.withdrawn[0] == 3 && v.to_key.empty());
+		assert(v.to_host.size() == 1 && v.to_host[0][4] == 0x90 && v.to_host[0][7] == 0x2d);
+		assert(!w.holding());
+		assert(asked(w, packets(3, 0x90, client_pin(4)), t0, &v));
+		gdp::KeyRequest req;
+		w.feed(packets(3, 0x90, get_assertion("github.com", true))[0].data(), 64, t0, &v);
+		assert(v.withdrawn.size() == 1 && v.to_key.size() == 1 && !w.holding());
+		(void)req;
+	}
+
+	// One approval covers a listing: the commands after it pass while they
+	// keep coming, until a pause longer than the grant.
+	{
+		gdp::KeyPolicy w(t0, true);
+		assert(asked(w, packets(1, 0x90, cm(1)), t0, &v));
+		w.approve(1, t0, &v);
+		for (uint64_t sub : {2, 3, 3, 4, 5}) {
+			w.feed(packets(1, 0x90, cm(sub))[0].data(), 64, t0 + 1000000, &v);
+			assert(v.to_key.size() == 1 && !v.ask);
+		}
+		// Deleting is never covered.
+		assert(asked(w, packets(1, 0x90, cm(6)), t0 + 2000000, &v));
+		w.deny(1, &v);
+		assert(asked(w, packets(1, 0x90, cm(2)), t0 + 2000000 + gdp::KeyPolicy::kListingGrantUs, &v));
+	}
+
+	// An enrolment's samples and naming pass after its approval.
+	{
+		gdp::KeyPolicy w(t0, true);
+		assert(asked(w, packets(1, 0x90, cat({{0x09}, map(1, {cint(2), cint(1)})})), t0, &v));
+		w.approve(1, t0, &v);
+		for (uint64_t sub : {2, 2, 2, 5}) {
+			w.feed(packets(1, 0x90, cat({{0x09}, map(1, {cint(2), cint(sub)})}))[0].data(), 64, t0 + 1000000,
+				&v);
+			assert(v.to_key.size() == 1);
+		}
+		// Sensor info and the modality query never ask.
+		w.feed(packets(1, 0x90, cat({{0x09}, map(1, {cint(2), cint(7)})}))[0].data(), 64, t0, &v);
+		assert(v.to_key.size() == 1);
+		w.feed(packets(1, 0x90, cat({{0x09}, map(1, {cint(6), kTrue})}))[0].data(), 64, t0, &v);
+		assert(v.to_key.size() == 1);
+	}
+
+	// A delete names the passkey when the key listed it: the site from the
+	// site listing, by its ID's hash, the account from the credential's.
+	{
+		gdp::KeyPolicy w(t0, true);
+		Bytes hash(32, 0x11), cred(16, 0x22);
+		auto bstr = [](const Bytes &b) { return cat({head(2, b.size()), b}); };
+		auto from_key = [&](const Bytes &reply) {
+			for (const Bytes &p : packets(1, 0x90, reply)) {
+				w.observe_key(p.data(), p.size());
+			}
+		};
+		assert(asked(w, packets(1, 0x90, cm(2)), t0, &v));
+		w.approve(1, t0, &v);
+		from_key(cat({{0x00},
+			map(3,
+				{cint(3), map(1, {text("id"), text("github.com")}), cint(4), bstr(hash), cint(5),
+					cint(1)})}));
+		Bytes creds_begin = cat({{0x0a}, map(2, {cint(1), cint(4), cint(2), map(1, {cint(1), bstr(hash)})})});
+		w.feed(packets(1, 0x90, creds_begin)[0].data(), 64, t0 + 1, &v);
+		assert(v.to_key.size() == 1);
+		// A keep-alive first, as a slow key sends; then the credential, long
+		// enough to take several packets.
+		w.observe_key(packets(1, 0xbb, {0x01})[0].data(), 64);
+		from_key(cat({{0x00},
+			map(3,
+				{cint(6), map(2, {text("id"), bytes(64), text("name"), text("jsaiko")}), cint(7),
+					map(2, {text("id"), bstr(cred), text("type"), text("public-key")}), cint(8),
+					bytes(77)})}));
+		Bytes del = cat({{0x0a},
+			map(2,
+				{cint(1), cint(6), cint(2),
+					map(1, {cint(2), map(2, {text("id"), bstr(cred), text("type"), text("public-key")})})})});
+		assert(asked(w, packets(1, 0x90, del), t0 + 2, &v));
+		assert(v.consent.kind == gdp::KeyConsent::kDeleteCredential && v.consent.rp_id == "github.com" &&
+			v.consent.user == "jsaiko");
+		gdp::KeyConsentText prompt = gdp::describe_consent(v.consent, "YubiKey");
+		assert(prompt.body.find("github.com (jsaiko)") != std::string::npos);
+		// One it never listed: asked about all the same, unnamed.
+		Bytes other = cat({{0x0a},
+			map(2, {cint(1), cint(6), cint(2), map(1, {cint(2), map(1, {text("id"), bytes(16)})})})});
+		w.deny(1, &v);
+		assert(asked(w, packets(1, 0x90, other), t0 + 3, &v) && v.consent.rp_id.empty());
+	}
+}
+
 int main() {
+	test_consent();
 	// A YubiKey 5's FIDO interface, byte for byte: also gdp-spec.md
 	// §8.7's fixed descriptor.
 	const std::vector<uint8_t> yubikey = {0x06, 0xd0, 0xf1, 0x09, 0x01, 0xa1, 0x01, 0x09, 0x20, 0x15, 0x00,
@@ -220,28 +399,25 @@ int main() {
 	assert(noticed(w, packets(1, 0x83, {0x00, 0x02, 0x03, 0x00}), &req));
 	assert(!noticed(w, packets(1, 0x83, {0x00, 0x02, 0x07, 0x00}), &req));
 
-	// Maintenance is refused in the key's place: CTAP2_ERR_OPERATION_DENIED
-	// on the channel, and the key never sees a packet of it.
+	// Maintenance the client can't describe is refused in the key's place:
+	// CTAP2_ERR_OPERATION_DENIED on the channel, and the key never sees a
+	// packet of it. The rest is held for consent (test_consent()).
 	std::string what;
+	// With no clock, a reset is out of its window.
 	assert(refused(w, packets(1, 0x90, {0x07}), 0x90, 0x27, &what) && what == "reset it");
-	assert(refused(w, packets(1, 0x90, client_pin(3)), 0x90, 0x27, &what) && what == "set or change its PIN");
-	assert(refused(w, packets(1, 0x90, client_pin(4)), 0x90, 0x27, &what));
 	// A ClientPIN whose subcommand can't be read is refused rather than
-	// passed; a long one (three packets) is held and refused whole.
+	// passed or asked about.
 	assert(refused(w, packets(1, 0x90, {0x06, 0xa1, 0x01, 0x02}), 0x90, 0x27, &what));
-	std::vector<Bytes> set_pin = packets(1, 0x90,
-		cat({{0x06}, map(4, {cint(1), cint(2), cint(2), cint(3), cint(3), bytes(65), cint(5), bytes(64)})}));
-	assert(set_pin.size() == 3);
-	assert(refused(w, set_pin, 0x90, 0x27, &what) && what == "set or change its PIN");
 	for (uint8_t cmd : {0x0a, 0x41}) {
-		assert(refused(w, packets(1, 0x90, {cmd, 0xa1, 0x01, 0x01}), 0x90, 0x27, &what) &&
-			what == "manage its credentials");
+		assert(refused(w, packets(1, 0x90, {cmd, 0xa1, 0x01, 0x09}), 0x90, 0x27, &what) &&
+			what == "manage its passkeys");
 	}
 	for (uint8_t cmd : {0x09, 0x40}) {
 		assert(refused(w, packets(1, 0x90, {cmd}), 0x90, 0x27, &what) && what == "enrol fingerprints on it");
 	}
-	assert(refused(w, packets(1, 0x90, {0x0d, 0xa1, 0x01, 0x02}), 0x90, 0x27, &what) &&
-		what == "change its configuration");
+	// authenticatorConfig's vendorPrototype.
+	assert(refused(w, packets(1, 0x90, {0x0d, 0xa1, 0x01, 0x18, 0xff}), 0x90, 0x27, &what) &&
+		what == "change a vendor setting");
 	assert(refused(w, packets(1, 0x90, {0x50}), 0x90, 0x27, &what) && what == "send it command 0x50");
 	// A CTAPHID command outside the set (a vendor one, a KEEPALIVE the host
 	// has no business sending): CTAPHID_ERROR, ERR_INVALID_CMD.

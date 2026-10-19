@@ -2019,26 +2019,58 @@ channels, keep-alives and timeouts work across the relay as they do
 locally, a few round trips per sign-in. The host never answers a packet
 itself; the client does only as the next paragraph says.
 
-A forwarded key is for signing in, not for maintenance: the session is
-remote, and what it may ask the key is bounded by the client, which
-holds each channel's message until it is complete and then passes it to
-the key whole or answers it in the key's place. A client MUST NOT pass
-to the key a CTAP2 command other than `authenticatorMakeCredential`,
-`authenticatorGetAssertion`, `authenticatorGetNextAssertion`,
-`authenticatorGetInfo`, `authenticatorSelection`,
-`authenticatorLargeBlobs`, and `authenticatorClientPIN` with a
-subcommand other than `setPIN` and `changePIN`; it answers any other,
-`authenticatorReset`, credential management, enrolment, configuration
-and vendor commands included, with a `CTAPHID_CBOR` response of the
-single status `CTAP2_ERR_OPERATION_DENIED` (0x27) on the request's
-channel, so the host's FIDO client fails at once rather than waiting out
-a timeout. Likewise it passes only the CTAPHID commands `INIT`, `PING`,
-`MSG`, `CBOR`, `CANCEL`, `WINK` and `LOCK`, and answers any other with
-`CTAPHID_ERROR` `ERR_INVALID_CMD`. A `MSG` (U2F) command carries no
-maintenance and passes. The client SHOULD tell its user what was
-refused. A FIDO client in the session that manages keys (a browser's
-security-key settings page) fails on a forwarded key by design; the key
-is managed on the client's own machine, with forwarding off.
+A forwarded key signs in freely but is maintained only with the client
+user's consent: the session is remote, and what it may ask the key is
+bounded by the client, which holds each channel's message until it is
+complete and then passes it to the key whole, holds it for its user's
+answer, or answers it in the key's place ([ADR 0016](../adr/0016-key-maintenance-by-consent.md)).
+
+A client passes, unasked, the CTAP2 commands a sign-in uses:
+`authenticatorMakeCredential`, `authenticatorGetAssertion`,
+`authenticatorGetNextAssertion`, `authenticatorGetInfo`,
+`authenticatorSelection`, `authenticatorLargeBlobs`, and
+`authenticatorClientPIN` with a subcommand other than `setPIN` and
+`changePIN`. It MUST NOT pass a maintenance request unless its user
+approved that request in a prompt the client draws:
+
+- `authenticatorClientPIN` `setPIN` and `changePIN`;
+- `authenticatorReset`, which the client asks about only within ten
+  seconds of the key appearing (a key accepts it only just after
+  power-up) and refuses later unasked;
+- credential management (0x0A, and the preview 0x41): one approval MAY
+  cover the listing subcommands (metadata, and the begin and next of
+  sites and of credentials) while they keep coming at most a minute
+  apart; `deleteCredential` and `updateUserInformation` are asked about
+  each time;
+- bio enrolment (0x09, and the preview 0x40): `enrollBegin`, after which
+  the enrolment's samples and naming pass; `removeEnrollment`;
+  `setFriendlyName` outside an enrolment; `enumerateEnrollments` as a
+  listing. `getFingerprintSensorInfo`, the modality query and
+  `cancelCurrentEnrollment` pass;
+- `authenticatorConfig`'s `enableEnterpriseAttestation`,
+  `toggleAlwaysUv` and `setMinPINLength`.
+
+The prompt names the operation and the key in its own words, never in
+any the host supplies; its approval is not given by Enter or by a click
+or key press in its first second; unanswered, it denies. While a request
+is held the client sends the host `CTAPHID_KEEPALIVE` with status
+`UPNEEDED` on its channel at least every 100 ms, as a key waiting for a
+touch does. A `CTAPHID_CANCEL` on that channel withdraws the request:
+the client takes its prompt down and answers `CTAP2_ERR_KEEPALIVE_CANCEL`
+(0x2D) in the key's place, without passing the cancel on. A client MAY
+refuse maintenance without asking, by its user's or administrator's
+setting, or after its user has turned several requests down.
+
+A client answers what it refuses (a request its user denied, or any
+other CTAP2 command or subcommand, vendor ones and `authenticatorConfig`'s
+`vendorPrototype` included) with a `CTAPHID_CBOR` response of the single
+status `CTAP2_ERR_OPERATION_DENIED` (0x27) on the request's channel, so
+the host's FIDO client fails at once rather than waiting out a timeout.
+Likewise it passes only the CTAPHID commands `INIT`, `PING`, `MSG`,
+`CBOR`, `CANCEL`, `WINK` and `LOCK`, and answers any other, vendor
+commands included, with `CTAPHID_ERROR` `ERR_INVALID_CMD`. A `MSG` (U2F)
+command carries no maintenance and passes. The client SHOULD tell its
+user what was refused.
 
 The client SHOULD show its user which site a request is for. The CTAP2
 requests that need the user's touch, `authenticatorMakeCredential` and
@@ -2591,6 +2623,7 @@ setting:
 | 11 | `display_sleep_minutes` | uint32 | Turn the display off after this many minutes without input; 0 never. |
 | 12 | `audio_output` | string | Where sound plays: `display`, `builtin` or `auto`. |
 | 13 | `forward_security_keys` | bool | Offer `security-key` (§8.7) and forward the client's keys. |
+| 14 | `refuse_key_maintenance` | bool | With 13: refuse a forwarded key's maintenance (§8.7) without asking. |
 
 Client settings in a profile take effect
 at the next session the client starts, never in a running one;

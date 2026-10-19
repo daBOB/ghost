@@ -703,6 +703,19 @@ void StreamSession::main_loop() {
 			follow_window();
 		}
 		tick_pan(now_us);
+		// A held key request keeps the host's FIDO client waiting, as a key
+		// waiting for its touch does.
+		if (client_.security_keys_enabled() && now_us >= next_key_keepalive_us_) {
+			constexpr uint64_t kKeepaliveUs = 100000;
+			next_key_keepalive_us_ = now_us + kKeepaliveUs;
+			for (uint32_t i = 0; i < gdp::kMaxSecurityKeys; i++) {
+				if (keys_[i] && key_policy_[i].holding()) {
+					for (const gdp::KeyPacket &p : key_policy_[i].keepalives()) {
+						client_.send_security_key_input(i, p.data(), p.size());
+					}
+				}
+			}
+		}
 		if (client_.security_keys_enabled() && now_us >= next_key_check_us_) {
 			// Cheap: SDL keeps the count from its own hotplug watch.
 			constexpr uint64_t kKeyCheckUs = 500000;
@@ -1417,6 +1430,7 @@ void StreamSession::rescan_security_keys() {
 		if (keys_[i] && !present(keys_[i]->identity().path)) {
 			SLOG_INFO("spectre: security key \"%s\" (slot %u) unplugged", keys_[i]->identity().name.c_str(),
 				i);
+			withdraw_key_prompts(i);
 			keys_[i].reset(); // its threads stop here
 			client_.send_security_key_disconnect(i);
 		}
@@ -1454,9 +1468,17 @@ void StreamSession::rescan_security_keys() {
 		// After the connect: its packets follow it on the input stream.
 		key->start([this, i](const uint8_t *packet, size_t len) {
 			client_.send_security_key_input(i, packet, len);
+			// A bound, in case the main loop stalls: what's dropped only
+			// costs a delete prompt its passkey's name.
+			constexpr size_t kMaxQueued = 4096;
+			std::lock_guard<std::mutex> lock(key_replies_mutex_);
+			if (key_replies_.size() < kMaxQueued) {
+				key_replies_.emplace_back(i, std::string(reinterpret_cast<const char *>(packet), len));
+			}
 		});
 		keys_[i] = std::move(key);
-		key_policy_[i] = gdp::KeyPolicy{};
+		key_attached_us_[i] = gdp::monotonic_us();
+		key_policy_[i] = gdp::KeyPolicy(key_attached_us_[i], !options_.refuse_key_maintenance);
 		notify(NoticeLevel::kInfo, "Security key forwarded: " + id.name, kToastUs);
 		mark_ui_dirty();
 	}
@@ -1465,8 +1487,15 @@ void StreamSession::rescan_security_keys() {
 void StreamSession::relay_security_key_packet(uint32_t i, const std::string &packet) {
 	// Long enough to find the key and touch it; the next request replaces it.
 	constexpr uint64_t kToastUs = 10000000;
+	// What the key said so far first: a delete names the passkey from the
+	// listing's replies.
+	drain_key_replies();
 	gdp::KeyVerdict verdict;
-	key_policy_[i].feed(reinterpret_cast<const uint8_t *>(packet.data()), packet.size(), &verdict);
+	key_policy_[i].feed(reinterpret_cast<const uint8_t *>(packet.data()), packet.size(), gdp::monotonic_us(),
+		&verdict);
+	for (uint32_t cid : verdict.withdrawn) {
+		withdraw_key_prompt(i, cid);
+	}
 	for (const gdp::KeyPacket &p : verdict.to_key) {
 		keys_[i]->output(std::string(reinterpret_cast<const char *>(p.data()), p.size()));
 	}
@@ -1479,8 +1508,12 @@ void StreamSession::relay_security_key_packet(uint32_t i, const std::string &pac
 		SLOG_ERROR("spectre: security key \"%s\": the host tried to %s; refused", name.c_str(),
 			verdict.refused_what.c_str());
 		notify(NoticeLevel::kWarning, "The host tried to " + verdict.refused_what, kToastUs, "key-request",
-			"Refused. Manage security keys on this computer.");
+			verdict.refused_why.empty() ? "Refused." : "Refused. " + verdict.refused_why);
 		mark_ui_dirty();
+		return;
+	}
+	if (verdict.ask) {
+		ask_key_consent(i, verdict);
 		return;
 	}
 	if (!verdict.notice) {
@@ -1504,6 +1537,114 @@ void StreamSession::relay_security_key_packet(uint32_t i, const std::string &pac
 	mark_ui_dirty();
 }
 
+void StreamSession::ask_key_consent(uint32_t i, const gdp::KeyVerdict &verdict) {
+	constexpr int kMaxKeyDenials = 3;
+	constexpr uint64_t kPromptUs = 30000000;
+	// A reset's prompt can't outlast the key's own window, but leaves at
+	// least a moment to read it.
+	constexpr uint64_t kMinResetPromptUs = 3000000;
+	const std::string &name = keys_[i]->identity().name;
+	const uint32_t cid = verdict.held_cid;
+	const gdp::KeyConsent::Kind kind = verdict.consent.kind;
+	gdp::KeyConsentText text = gdp::describe_consent(verdict.consent, name);
+	if (key_denials_ >= kMaxKeyDenials) {
+		SLOG_INFO("spectre: security key \"%s\": %s -- refused unasked after %d denials", name.c_str(),
+			text.title.c_str(), key_denials_);
+		answer_key_consent(i, cid, false, kind);
+		notify(NoticeLevel::kWarning, "Refused: " + text.title, 10000000, "key-request",
+			"You turned down three requests from this host. Reconnect to be asked again.");
+		return;
+	}
+	PromptSpec spec;
+	spec.level = NoticeLevel::kWarning;
+	spec.title = text.title;
+	spec.body = text.body;
+	spec.allow_label = text.allow_label;
+	spec.deny_label = text.deny_label;
+	spec.timeout_us = kPromptUs;
+	if (kind == gdp::KeyConsent::kReset) {
+		uint64_t now = gdp::monotonic_us();
+		uint64_t ends = key_attached_us_[i] + gdp::KeyPolicy::kResetWindowUs;
+		spec.timeout_us = std::max(kMinResetPromptUs, ends > now ? ends - now : 0);
+	}
+	SLOG_INFO("spectre: security key \"%s\": asking: %s", name.c_str(), text.title.c_str());
+	uint64_t id = ask(std::move(spec), [this, i, cid, kind](const PromptAnswer &answer) {
+		key_prompts_.erase({i, cid});
+		if (!answer.allowed) {
+			key_denials_++;
+		}
+		answer_key_consent(i, cid, answer.allowed, kind);
+	});
+	key_prompts_[{i, cid}] = id;
+}
+
+void StreamSession::answer_key_consent(uint32_t i, uint32_t cid, bool allowed, gdp::KeyConsent::Kind kind) {
+	if (i >= gdp::kMaxSecurityKeys || !keys_[i]) {
+		return;
+	}
+	gdp::KeyVerdict v;
+	if (allowed) {
+		key_policy_[i].approve(cid, gdp::monotonic_us(), &v);
+	} else {
+		key_policy_[i].deny(cid, &v);
+	}
+	for (const gdp::KeyPacket &p : v.to_key) {
+		keys_[i]->output(std::string(reinterpret_cast<const char *>(p.data()), p.size()));
+	}
+	for (const gdp::KeyPacket &p : v.to_host) {
+		client_.send_security_key_input(i, p.data(), p.size());
+	}
+	SLOG_INFO("spectre: security key \"%s\": request %s", keys_[i]->identity().name.c_str(),
+		allowed ? "allowed" : "refused");
+	// The key now waits for a touch the host's FIDO client may not ask for.
+	if (allowed && !v.to_key.empty() &&
+		(kind == gdp::KeyConsent::kReset || kind == gdp::KeyConsent::kEnrolFingerprint)) {
+		notify(NoticeLevel::kInfo,
+			kind == gdp::KeyConsent::kReset ? "Touch your security key now to erase it"
+											: "Touch your security key's sensor when the session asks",
+			10000000, "key-request");
+	}
+}
+
+void StreamSession::withdraw_key_prompt(uint32_t i, uint32_t cid) {
+	auto it = key_prompts_.find({i, cid});
+	if (it == key_prompts_.end()) {
+		return;
+	}
+	notices_.cancel(it->second);
+	prompt_handlers_.erase(it->second);
+	key_prompts_.erase(it);
+	sync_prompt_mode();
+	mark_ui_dirty();
+}
+
+void StreamSession::withdraw_key_prompts(uint32_t i) {
+	for (auto it = key_prompts_.begin(); it != key_prompts_.end();) {
+		if (it->first.first == i) {
+			notices_.cancel(it->second);
+			prompt_handlers_.erase(it->second);
+			it = key_prompts_.erase(it);
+		} else {
+			++it;
+		}
+	}
+	sync_prompt_mode();
+	mark_ui_dirty();
+}
+
+void StreamSession::drain_key_replies() {
+	std::vector<std::pair<uint32_t, std::string>> replies;
+	{
+		std::lock_guard<std::mutex> lock(key_replies_mutex_);
+		replies.swap(key_replies_);
+	}
+	for (const auto &[i, packet] : replies) {
+		if (i < gdp::kMaxSecurityKeys && keys_[i]) {
+			key_policy_[i].observe_key(reinterpret_cast<const uint8_t *>(packet.data()), packet.size());
+		}
+	}
+}
+
 void StreamSession::on_security_key_rejected(uint32_t i, const std::string &reason) {
 	if (i >= gdp::kMaxSecurityKeys || !keys_[i]) {
 		return;
@@ -1511,6 +1652,7 @@ void StreamSession::on_security_key_rejected(uint32_t i, const std::string &reas
 	std::string name = keys_[i]->identity().name;
 	SLOG_ERROR("spectre: the host refused security key \"%s\" (%s)", name.c_str(), reason.c_str());
 	refused_keys_.insert(keys_[i]->identity().path);
+	withdraw_key_prompts(i);
 	keys_[i].reset();
 	notify(NoticeLevel::kWarning, "The host refused " + name, 5000000);
 	mark_ui_dirty();
@@ -2743,11 +2885,12 @@ void StreamSession::notify(NoticeLevel level, std::string title, uint64_t durati
 	mark_ui_dirty();
 }
 
-void StreamSession::ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done) {
+uint64_t StreamSession::ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done) {
 	uint64_t id = notices_.prompt(std::move(spec), gdp::monotonic_us());
 	prompt_handlers_[id] = std::move(done);
 	sync_prompt_mode();
 	mark_ui_dirty();
+	return id;
 }
 
 void StreamSession::sync_prompt_mode() {

@@ -630,14 +630,14 @@ async fn the_thin_client_profile_is_edited_and_checked() {
 
     // Unticked boxes are simply absent from the form.
     let form = format!(
-        "csrf={csrf}&resolution=1920x1080&view=fit&preferred_decoder=software&preferred_codec=h264&network_profile=lan&forward_gamepads=1&forward_security_keys=1&audio_output=builtin&display_sleep_minutes=45"
+        "csrf={csrf}&resolution=1920x1080&view=fit&preferred_decoder=software&preferred_codec=h264&network_profile=lan&forward_gamepads=1&forward_security_keys=1&refuse_key_maintenance=1&audio_output=builtin&display_sleep_minutes=45"
     );
     let (status, _, _) = send(&h.app, post("/admin/thin-clients/settings", Some(&cookie), &form)).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let p = h.veil.thin_clients.profile();
     assert_eq!((p.resolution.as_str(), p.view.as_str(), p.preferred_decoder.as_str()), ("1920x1080", "fit", "software"));
     assert!(!p.lossless_refinement && !p.allow_pyrowave && p.forward_gamepads);
-    assert!(p.forward_security_keys);
+    assert!(p.forward_security_keys && p.refuse_key_maintenance);
     assert_eq!((p.display_sleep_minutes, p.audio_output.as_str()), (45, "builtin"));
     let entry = &h.veil.db.audit_log(1, None).unwrap()[0].1;
     assert_eq!(entry.action, "thin client settings changed");
@@ -672,7 +672,7 @@ async fn a_thin_client_has_its_own_settings() {
     // Only what isn't left at the default's is stored.
     let form = format!(
         "csrf={csrf}&resolution=inherit&view=inherit&preferred_decoder=inherit&preferred_codec=inherit&lossless_refinement=off\
-         &allow_pyrowave=inherit&network_profile=inherit&forward_gamepads=inherit&forward_security_keys=inherit&microphone=inherit&debug_logging=inherit\
+         &allow_pyrowave=inherit&network_profile=inherit&forward_gamepads=inherit&forward_security_keys=inherit&refuse_key_maintenance=inherit&microphone=inherit&debug_logging=inherit\
          &audio_output=builtin&display_sleep_minutes="
     );
     let (status, _, _) = send(&h.app, post(&path, Some(&cookie), &form)).await;

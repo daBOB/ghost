@@ -51,6 +51,7 @@ constexpr auto kTileOutlineKey = "spectre/debug_tile_outlines";
 constexpr auto kKioskKey = "spectre/debug_kiosk";
 constexpr auto kGamepadKey = "spectre/forward_gamepads";
 constexpr auto kSecurityKeyKey = "spectre/forward_security_keys";
+constexpr auto kKeyMaintenanceKey = "spectre/refuse_key_maintenance";
 constexpr auto kMicrophoneKey = "spectre/microphone";
 constexpr auto kPyrowaveKey = "spectre/allow_pyrowave";
 constexpr auto kFollowWindowKey = "spectre/follow_window";
@@ -80,6 +81,7 @@ SpectreSettings load_settings() {
 	settings.debug_kiosk = store.value(kKioskKey, false).toBool();
 	settings.forward_gamepads = store.value(kGamepadKey, true).toBool();
 	settings.forward_security_keys = store.value(kSecurityKeyKey, false).toBool();
+	settings.refuse_key_maintenance = store.value(kKeyMaintenanceKey, false).toBool();
 	settings.microphone = store.value(kMicrophoneKey, false).toBool();
 	settings.allow_pyrowave = store.value(kPyrowaveKey, true).toBool();
 	settings.follow_window = store.value(kFollowWindowKey, false).toBool();
@@ -102,6 +104,7 @@ void save_settings(const SpectreSettings &settings) {
 	store.setValue(kKioskKey, settings.debug_kiosk);
 	store.setValue(kGamepadKey, settings.forward_gamepads);
 	store.setValue(kSecurityKeyKey, settings.forward_security_keys);
+	store.setValue(kKeyMaintenanceKey, settings.refuse_key_maintenance);
 	store.setValue(kMicrophoneKey, settings.microphone);
 	store.setValue(kPyrowaveKey, settings.allow_pyrowave);
 	store.setValue(kFollowWindowKey, settings.follow_window);
@@ -184,6 +187,13 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 	ui->kioskCheck->setChecked(settings.debug_kiosk);
 	ui->gamepadCheck->setChecked(settings.forward_gamepads);
 	ui->securityKeyCheck->setChecked(settings.forward_security_keys);
+	ui->keyMaintenanceCheck->setChecked(settings.refuse_key_maintenance);
+	// Only means something for keys that are forwarded.
+	auto update_key_maintenance_enabled = [this]() {
+		ui->keyMaintenanceCheck->setEnabled(ui->securityKeyCheck->isChecked());
+	};
+	update_key_maintenance_enabled();
+	connect(ui->securityKeyCheck, &QCheckBox::toggled, this, update_key_maintenance_enabled);
 	ui->microphoneCheck->setChecked(settings.microphone);
 	ui->pyrowaveCheck->setChecked(settings.allow_pyrowave);
 	ui->losslessCheck->setChecked(settings.lossless_refinement);
@@ -269,6 +279,7 @@ SpectreSettings SettingsDialog::settings() const {
 	settings.debug_kiosk = ui->kioskCheck->isChecked();
 	settings.forward_gamepads = ui->gamepadCheck->isChecked();
 	settings.forward_security_keys = ui->securityKeyCheck->isChecked();
+	settings.refuse_key_maintenance = ui->keyMaintenanceCheck->isChecked();
 	settings.microphone = ui->microphoneCheck->isChecked();
 	settings.allow_pyrowave = ui->pyrowaveCheck->isChecked();
 	settings.lossless_refinement = ui->losslessCheck->isChecked();

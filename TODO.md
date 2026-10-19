@@ -69,6 +69,15 @@ Limitations section.
   Wisp thin client (whether the kiosk user can open the key's hidraw
   node), macOS's IOHID path, two keys at once, and a session through
   Veil's gateway.
+- Key maintenance by consent (ADR 0016) is unit-tested in libgdp only.
+  Untested end to end: each prompt against a real key through a browser's
+  security-key settings page and `fido2-token` (set and change the PIN,
+  list and delete passkeys, a reset right after a replug), a passkey
+  delete naming its site from a real key's listing replies, the
+  keep-alives holding Chrome and libfido2 while a prompt is up, a
+  CANCEL withdrawing one, and a bio key (YubiKey Bio) for enrolment.
+  The Wisp agent's and greeter's `refuse_key_maintenance` lines aren't
+  built outside the Wisp image.
 - Security keys on Windows: spectre can't open a FIDO HID device without
   elevation (Windows 10 1903 on). Plan (ADR 0015): a helper service the
   installer adds, as LocalSystem, that opens the keys and relays their

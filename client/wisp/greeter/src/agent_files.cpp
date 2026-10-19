@@ -44,6 +44,7 @@ SpectreSettings load_profile(const QString &run_dir) {
 	text("network_profile", &settings.network_profile);
 	flag("forward_gamepads", &settings.forward_gamepads);
 	flag("forward_security_keys", &settings.forward_security_keys);
+	flag("refuse_key_maintenance", &settings.refuse_key_maintenance);
 	flag("microphone", &settings.microphone);
 	return settings;
 }

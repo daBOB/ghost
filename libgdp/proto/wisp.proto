@@ -135,4 +135,8 @@ message ClientProfile {
   // spectre's again: forward the client's FIDO security keys to the host
   // (spectre -U, gdp-spec.md §8.7).
   bool forward_security_keys = 13;
+
+  // With forward_security_keys: refuse a key's maintenance outright
+  // (spectre -u) rather than asking the user (gdp-spec.md §8.7).
+  bool refuse_key_maintenance = 14;
 }

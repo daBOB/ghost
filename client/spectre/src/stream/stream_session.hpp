@@ -45,6 +45,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <optional>
 #include <set>
@@ -190,6 +191,10 @@ struct StreamOptions {
 	// session (spectre -U). Off by default: the host can ask a forwarded
 	// key to sign in anywhere, and only the user's touch says no.
 	bool forward_security_keys = false;
+	// Refuse a forwarded key's maintenance (reset, PIN changes, passkey and
+	// fingerprint management, configuration) outright rather than asking
+	// the user (spectre -u, gdp/security_key.hpp's KeyPolicy).
+	bool refuse_key_maintenance = false;
 	// Offer the "microphone" capability and, if the host takes it, send
 	// the default recording device to it (spectre -M). Off by default: a
 	// microphone is never opened unless the user asked for one.
@@ -358,6 +363,15 @@ private:
 	// allowed, with a toast naming the site a touch would approve; or
 	// answered to the host here, with a toast saying what was refused.
 	void relay_security_key_packet(uint32_t i, const std::string &packet);
+	// A maintenance request the policy is holding: prompt for it, or
+	// refuse it unasked past the denial limit.
+	void ask_key_consent(uint32_t i, const gdp::KeyVerdict &verdict);
+	void answer_key_consent(uint32_t i, uint32_t cid, bool allowed, gdp::KeyConsent::Kind kind);
+	// Takes down the prompts for slot `i`'s held requests: on `cid` only,
+	// or all of them (the key went away).
+	void withdraw_key_prompt(uint32_t i, uint32_t cid);
+	void withdraw_key_prompts(uint32_t i);
+	void drain_key_replies();
 	// Any axis/button event: marks the slot so flush_gamepads() sends one
 	// snapshot for it, however many SDL events the poll batch held.
 	void mark_gamepad_dirty(uint32_t instance_id);
@@ -380,7 +394,7 @@ private:
 	void notify(NoticeLevel level, std::string title, uint64_t duration_us, std::string tag = {},
 		std::string body = {});
 	// Queues a prompt; `done` gets its answer.
-	void ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done);
+	uint64_t ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done);
 	// Hands the keyboard and pointer to a prompt as it appears, and back
 	// when the last one is answered, as open_menu()/close_menu() do.
 	void sync_prompt_mode();
@@ -748,13 +762,28 @@ private:
 	};
 	GamepadSlot gamepads_[gdp::kMaxGamepads];
 
+	// What each key sent the host, copied off its reader thread for its
+	// policy to read (KeyPolicy::observe_key): the names a delete prompt
+	// shows. Before keys_, whose threads fill it until they stop.
+	std::mutex key_replies_mutex_;
+	std::vector<std::pair<uint32_t, std::string>> key_replies_;
 	// Forwarded security keys, one per wire slot (SecurityKeyConnect.
 	// key_index); after client_, so their threads stop before it goes.
 	std::unique_ptr<SecurityKey> keys_[gdp::kMaxSecurityKeys];
 	// The policy on the host's packets for each key (gdp-spec.md §8.7):
 	// sign-in passes, with the site a touch would approve shown as a
-	// toast; maintenance is refused in the key's place.
+	// toast; maintenance waits for the user's answer to a prompt, and what
+	// can't be described is refused in the key's place.
 	gdp::KeyPolicy key_policy_[gdp::kMaxSecurityKeys];
+	// When each key was opened: a reset's prompt lasts only as long as the
+	// key would still take one.
+	uint64_t key_attached_us_[gdp::kMaxSecurityKeys] = {};
+	// Prompts up (or queued) for held key requests, by slot and channel.
+	std::map<std::pair<uint32_t, uint32_t>, uint64_t> key_prompts_;
+	// Maintenance requests the user turned down or let time out on this
+	// connection: from the third, the rest are refused without asking.
+	int key_denials_ = 0;
+	uint64_t next_key_keepalive_us_ = 0;
 	// Keys the host refused or that couldn't be opened, by path: left
 	// alone until they're unplugged, rather than retried every rescan.
 	std::set<std::string> refused_keys_;

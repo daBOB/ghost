@@ -1,6 +1,6 @@
 # 0015. Security keys pass through with a fixed descriptor
 
-Status: Accepted (2026-10-18)
+Status: Accepted (2026-10-18); maintenance by consent since [0016](0016-key-maintenance-by-consent.md)
 
 ## Context
 

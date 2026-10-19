@@ -85,6 +85,9 @@ static void usage(const char *argv0) {
 	printf("            them; keys plugged in during the session too. Anything in the session can\n");
 	printf("            then ask a key to sign in anywhere, which only your touch on the key\n");
 	printf("            approves. Off by default\n");
+	printf("  -u        with -U: refuse a key's maintenance (reset, PIN changes, managing passkeys\n");
+	printf("            and fingerprints, its settings) outright. Otherwise each such request asks\n");
+	printf("            you first, and goes to the key only if you allow it\n");
 	printf("  -M        send this machine's microphone to the host, as a virtual microphone in the\n");
 	printf("            session, if it supports that. Off by default\n");
 	printf("  -S folder share a folder with the host, read-only, for the session: it shows up in\n");
@@ -230,6 +233,8 @@ int main(int argc, char *argv[]) {
 			options.raw_gamepads = false;
 		} else if (strcmp(arg, "-U") == 0) {
 			options.forward_security_keys = true;
+		} else if (strcmp(arg, "-u") == 0) {
+			options.refuse_key_maintenance = true;
 		} else if (strcmp(arg, "-M") == 0) {
 			options.microphone = true;
 		} else if (strcmp(arg, "-S") == 0) {
