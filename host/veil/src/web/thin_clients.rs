@@ -392,6 +392,12 @@ fn sections() -> Vec<Section> {
                     Kind::Flag,
                 ),
                 field(
+                    "forward_security_keys",
+                    "Forward security keys",
+                    "Let the host's browsers sign in with FIDO security keys (a YubiKey, say) plugged into the client, if the host supports it. While forwarded, anything in the session can ask a key to sign in to any site; only a touch on the key approves it. Off by default.",
+                    Kind::Flag,
+                ),
+                field(
                     "microphone",
                     "Send microphone",
                     "Send the client's microphone to the host, where applications see it as a microphone, if the host supports it. Off by default.",

@@ -2567,6 +2567,8 @@ setting:
 | 9 | `microphone` | bool | Offer `microphone` (§10.1). |
 | 10 | `debug_logging` | bool | Run the stream client with its debug log on. |
 | 11 | `display_sleep_minutes` | uint32 | Turn the display off after this many minutes without input; 0 never. |
+| 12 | `audio_output` | string | Where sound plays: `display`, `builtin` or `auto`. |
+| 13 | `forward_security_keys` | bool | Offer `security-key` (§8.7) and forward the client's keys. |
 
 Client settings in a profile take effect
 at the next session the client starts, never in a running one;

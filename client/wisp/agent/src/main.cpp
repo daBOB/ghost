@@ -120,6 +120,7 @@ std::string profile_json(const gdp::wisp::ClientProfile &p) {
 		<< "  \"allow_pyrowave\": " << b(p.allow_pyrowave()) << ",\n"
 		<< "  \"network_profile\": " << json_string(p.network_profile()) << ",\n"
 		<< "  \"forward_gamepads\": " << b(p.forward_gamepads()) << ",\n"
+		<< "  \"forward_security_keys\": " << b(p.forward_security_keys()) << ",\n"
 		<< "  \"microphone\": " << b(p.microphone()) << ",\n"
 		<< "  \"debug_logging\": " << b(p.debug_logging()) << ",\n"
 		<< "  \"display_sleep_minutes\": " << p.display_sleep_minutes() << ",\n"
