@@ -81,6 +81,7 @@ add_library(gdp STATIC
   src/negotiation.cpp
   src/clipboard.cpp
   src/file_list.cpp
+  src/security_key.cpp
   src/file_transfer.cpp
   src/remote_files.cpp
   src/remote_mount.cpp
@@ -176,6 +177,10 @@ if(NOT WIN32)
   add_executable(gdp_file_list_test tests/file_list_test.cpp)
   target_link_libraries(gdp_file_list_test PRIVATE gdp)
   add_test(NAME gdp_file_list_test COMMAND gdp_file_list_test)
+
+  add_executable(gdp_security_key_test tests/security_key_test.cpp)
+  target_link_libraries(gdp_security_key_test PRIVATE gdp)
+  add_test(NAME gdp_security_key_test COMMAND gdp_security_key_test)
 
   # A real FUSE mount, read from another thread through POSIX file calls;
   # passes (skipped) where FUSE isn't built or /dev/fuse can't be opened.

@@ -232,6 +232,19 @@
           </widget>
          </item>
          <item>
+          <widget class="QCheckBox" name="securityKeyCheck">
+           <property name="text">
+            <string>Forward security keys</string>
+           </property>
+           <property name="toolTip">
+            <string>Let the host's browsers sign in with FIDO security keys (a YubiKey, say)
+   plugged into this machine. While forwarded, anything in the session can ask a key
+   to sign in to any site; only your touch on the key approves it. Takes effect on
+   the next connection; the host must support it.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QCheckBox" name="microphoneCheck">
            <property name="text">
             <string>Send microphone</string>

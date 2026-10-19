@@ -19,6 +19,8 @@
 #include "decode/decoder.hpp"
 #include "gdp/gamepad.hpp"
 #include "input/raw_controller.hpp"
+#include "input/security_key.hpp"
+#include "gdp/security_key.hpp"
 #include "gdp/remote_files.hpp"
 #include "net/file_transfers.hpp"
 #include "net/host_file_reads.hpp"
@@ -177,6 +179,11 @@ struct StreamOptions {
 	// spectre -g: every controller standard. Only the starting mode --
 	// "hid" is offered either way, and the session menu switches.
 	bool raw_gamepads = true;
+	// Offer "security-key" and forward this machine's FIDO security keys
+	// to the host (gdp-spec.md §8.7), plugged in now or during the
+	// session (spectre -U). Off by default: the host can ask a forwarded
+	// key to sign in anywhere, and only the user's touch says no.
+	bool forward_security_keys = false;
 	// Offer the "microphone" capability and, if the host takes it, send
 	// the default recording device to it (spectre -M). Off by default: a
 	// microphone is never opened unless the user asked for one.
@@ -333,6 +340,13 @@ private:
 	// The session menu's controller row: switches StreamOptions::
 	// raw_gamepads and re-plugs every forwarded controller that way.
 	void set_raw_gamepads(bool raw);
+	// Matches the forwarded security keys to the ones find() lists:
+	// forwards new ones into free slots, unplugs gone ones. Run whenever
+	// SDL's HID device count changes, from the main loop.
+	void rescan_security_keys();
+	// The host refused or failed slot `i`'s key (SecurityKeyRejected): not
+	// tried again until it is unplugged.
+	void on_security_key_rejected(uint32_t i, const std::string &reason);
 	// Any axis/button event: marks the slot so flush_gamepads() sends one
 	// snapshot for it, however many SDL events the poll batch held.
 	void mark_gamepad_dirty(uint32_t instance_id);
@@ -703,6 +717,18 @@ private:
 		bool used() const { return pad || raw; }
 	};
 	GamepadSlot gamepads_[gdp::kMaxGamepads];
+
+	// Forwarded security keys, one per wire slot (SecurityKeyConnect.
+	// key_index); after client_, so their threads stop before it goes.
+	std::unique_ptr<SecurityKey> keys_[gdp::kMaxSecurityKeys];
+	// Keys the host refused or that couldn't be opened, by path: left
+	// alone until they're unplugged, rather than retried every rescan.
+	std::set<std::string> refused_keys_;
+	// SDL_hid_device_change_count() at the last rescan, checked every
+	// kKeyCheckUs; the first check always rescans.
+	uint32_t hid_change_count_ = 0;
+	bool keys_scanned_ = false;
+	uint64_t next_key_check_us_ = 0;
 
 	bool running_ = true;
 	// The presenter reported an unrecoverable Vulkan error (see

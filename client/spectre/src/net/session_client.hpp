@@ -144,6 +144,9 @@ public:
 	// Whether to offer "hid" alongside "gamepad" (gdp-spec.md §8.6): raw
 	// controllers. Must be called before connect().
 	void set_raw_controllers(bool enabled) { offer_hid_ = enabled; }
+	// Whether to offer "security-key" (gdp-spec.md §8.7) -- spectre -U.
+	// Must be called before connect(). Off means no key is ever opened.
+	void set_security_keys(bool enabled) { offer_security_key_ = enabled; }
 
 	// Whether to offer the "microphone" capability (gdp/audio_format.hpp)
 	// -- spectre -M. Must be called before connect(). Off means the
@@ -262,6 +265,19 @@ public:
 	std::function<void(uint32_t pad_index, uint32_t request_id, uint32_t report_id, int type,
 		const std::string &data)>
 		on_hid_set_report;
+
+	// Security keys (gdp-spec.md §8.7). No-ops unless
+	// security_keys_enabled(); safe from any thread, like the raw
+	// controllers' senders, since a key's reader thread sends its packets.
+	void send_security_key_connect(uint32_t key_index, const std::string &name, uint32_t vendor_id,
+		uint32_t product_id, uint32_t version);
+	void send_security_key_disconnect(uint32_t key_index);
+	void send_security_key_input(uint32_t key_index, const uint8_t *packet, size_t len);
+	// True once SessionAccept put "security-key" in effect.
+	bool security_keys_enabled() const { return security_key_enabled_.load(std::memory_order_acquire); }
+	// What the host sends about security keys; fire only from dispatch().
+	std::function<void(uint32_t key_index, const std::string &reason)> on_security_key_rejected;
+	std::function<void(uint32_t key_index, const std::string &packet)> on_security_key_output;
 	void request_keyframe();
 	// Sends the local clipboard's text to wraith (gdp-spec.md §7.9). A
 	// no-op before SessionAccept, unless the session negotiated the
@@ -411,6 +427,7 @@ private:
 	std::string host_network_profile_;
 	bool offer_gamepad_ = false;
 	bool offer_hid_ = false;
+	bool offer_security_key_ = false;
 	bool offer_refine_ = true;
 	bool offer_file_ = true;
 	bool offer_file_share_ = false;
@@ -435,6 +452,7 @@ private:
 	gdp::ClipboardEcho clipboard_echo_;
 	bool gamepad_enabled_ = false;
 	std::atomic<bool> hid_enabled_{false};
+	std::atomic<bool> security_key_enabled_{false};
 	bool offer_microphone_ = false;
 	bool microphone_enabled_ = false;
 	gdp::AudioFormat microphone_format_;

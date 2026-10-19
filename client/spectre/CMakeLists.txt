@@ -147,6 +147,7 @@ add_executable(spectre
   src/present/vulkan_presenter.cpp
   src/stream/stream_session.cpp
   src/input/raw_controller.cpp
+  src/input/security_key.cpp
   src/ui/font.cpp
   src/ui/glyphs.cpp
   src/ui/hotkey.cpp

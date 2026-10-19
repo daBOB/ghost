@@ -56,6 +56,10 @@ struct SpectreSettings {
 	// -G). On by default here, though spectre's own default is off;
 	// unticked, spectre never offers the capability at all.
 	bool forward_gamepads = true;
+	// Forward this machine's FIDO security keys to the host (spectre -U,
+	// gdp-spec.md §8.7). Off by default everywhere: a forwarded key signs
+	// whatever the session asks, once the user touches it.
+	bool forward_security_keys = false;
 	// Send this machine's microphone to the host (spectre -M). Off by
 	// default everywhere: nothing records until the user ticks it.
 	bool microphone = false;
