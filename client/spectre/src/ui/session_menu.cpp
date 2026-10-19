@@ -547,6 +547,7 @@ void SessionMenu::build(UiDrawList &out, const UiFont &font, int win_w, int win_
 
 	const float border = std::max(1.0f, std::floor(s / 2));
 	panel_rect_ = HitRect{panel_x - border, panel_y - border, panel_w + 2 * border, panel_h + 2 * border};
+	out.drop_shadow(panel_rect_.x, panel_rect_.y, panel_rect_.w, panel_rect_.h, s);
 	out.rect(panel_rect_.x, panel_rect_.y, panel_rect_.w, panel_rect_.h, kBorder);
 	out.rect(panel_x, panel_y, panel_w, panel_h, kBackdrop);
 

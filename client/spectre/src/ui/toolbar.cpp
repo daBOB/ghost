@@ -247,7 +247,10 @@ void Toolbar::build(UiDrawList &out, const UiFont &font, int win_w, int win_h) {
 		return;
 	}
 	if (fullscreen_) {
-		// Hangs from the top edge: bordered on the other three sides.
+		// Hangs from the top edge: bordered on the other three sides, and
+		// floating over the video, so it casts the notices' and the menu's
+		// shadow. Docked, it's part of the window's frame and casts none.
+		out.drop_shadow(bar_.x - m.border, 0.0f, bar_.w + 2 * m.border, bar_.h, m.s);
 		out.rect(bar_.x - m.border, 0.0f, bar_.w + 2 * m.border, bar_.h, kBorder);
 		out.rect(bar_.x, 0.0f, bar_.w, bar_.h - m.border, kBackdrop);
 	} else {

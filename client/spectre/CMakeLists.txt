@@ -154,6 +154,7 @@ add_executable(spectre
   src/ui/session_menu.cpp
   src/ui/stats_overlay.cpp
   src/ui/tile_debug_overlay.cpp
+  src/ui/notices.cpp
   src/ui/toast.cpp
   src/ui/toolbar.cpp
   src/audio/opus_decode.cpp
@@ -285,3 +286,14 @@ add_dependencies(spectre_ui_font_test spectre_ui_font)
 target_include_directories(spectre_ui_font_test PRIVATE src third_party "${SPECTRE_ICON_GEN_DIR}")
 spectre_warnings(spectre_ui_font_test)
 add_test(NAME spectre_ui_font_test COMMAND spectre_ui_font_test)
+
+add_executable(spectre_notices_test
+  tests/notices_test.cpp
+  src/ui/notices.cpp
+  src/ui/font.cpp
+)
+add_dependencies(spectre_notices_test spectre_ui_font)
+target_include_directories(spectre_notices_test PRIVATE src third_party "${SPECTRE_ICON_GEN_DIR}")
+target_include_directories(spectre_notices_test PRIVATE ${SDL3_INCLUDE_DIRS})
+spectre_warnings(spectre_notices_test)
+add_test(NAME spectre_notices_test COMMAND spectre_notices_test)

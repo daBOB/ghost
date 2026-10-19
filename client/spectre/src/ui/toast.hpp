@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
 // SPDX-License-Identifier: GPL-3.0-only
 
-// A short message centred over the video, for a few seconds or until
-// taken down: the hint that says how to release the mouse when it was
-// captured with a click (the toolbar button or the menu), since the
-// captured pointer can no longer reach that button to turn it off again;
-// the view, resolution and mute changes; and the "logging out" notice that
-// stays up until the session ends.
+// A message centred over the video until taken down: the "logging out"
+// notice that stays up until the session ends, since it is the state of
+// the whole session. Everything shorter-lived is a toast in the corner
+// (ui/notices.hpp).
 //
 // Pure state + layout, like ui/tile_debug_overlay.hpp: the caller shows
 // it, retires it from its main loop with expire(), and draws what build()

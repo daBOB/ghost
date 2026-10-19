@@ -55,7 +55,7 @@ other keys); see [installing the client](../../docs/install/spectre.md#during-a-
 | `src/decode/` | `Decoder` (FFmpeg and its hardware backends), the PyroWave decoder, the codec-support probe |
 | `src/present/` | `VulkanDevice`, `VideoImageSource`, `LosslessPlane`, `OverlayRenderer`, `VulkanPresenter` |
 | `src/stream/` | `StreamSession`: the SDL3 window, event loop and input |
-| `src/ui/` | The session menu, toolbar, statistics panel, toasts, font and hotkey parsing; no Vulkan |
+| `src/ui/` | The session menu, toolbar, statistics panel, notices (toasts and consent prompts), font and hotkey parsing; no Vulkan |
 | `src/audio/` | Opus decode, the jitter buffer, SDL3 playback, the microphone |
 | `shaders/` | GLSL for the video, rectangle, text and cursor pipelines, compiled to SPIR-V at build time |
 | `tools/` | `netprobe` and `netem-harness` (below) |

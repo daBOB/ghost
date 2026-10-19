@@ -33,6 +33,7 @@
 #include "ui/draw_list.hpp"
 #include "ui/font.hpp"
 #include "ui/hotkey.hpp"
+#include "ui/notices.hpp"
 #include "ui/session_menu.hpp"
 #include "ui/stats_overlay.hpp"
 #include "ui/toolbar.hpp"
@@ -42,6 +43,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -169,6 +171,10 @@ struct StreamOptions {
 	// ui/tile_debug_overlay.hpp). A debugging aid for the refinement layer; it
 	// has nothing to draw on a session that didn't negotiate it.
 	bool debug_tile_outlines = false;
+	// Play a scripted run of sample toasts and prompts a second into the
+	// session (spectre -Z, ui/notices.hpp): for checking how notices look
+	// and behave on a real desktop. The prompts' answers change nothing.
+	bool demo_notices = false;
 	// Offer the "gamepad" capability (gdp/gamepad.hpp), so local
 	// controllers are mirrored onto the host as virtual pads. Off unless
 	// spectre -G (which spectre-qt's "Forward gamepads" checkbox, on by
@@ -370,6 +376,15 @@ private:
 	// reach the button again. Scroll Lock itself needs no hint, and
 	// toggle_capture_mouse() takes it down on release.
 	void show_capture_mouse_hint();
+	// Shows a toast (ui/notices.hpp) and schedules the redraw.
+	void notify(NoticeLevel level, std::string title, uint64_t duration_us, std::string tag = {},
+		std::string body = {});
+	// Queues a prompt; `done` gets its answer.
+	void ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done);
+	// Hands the keyboard and pointer to a prompt as it appears, and back
+	// when the last one is answered, as open_menu()/close_menu() do.
+	void sync_prompt_mode();
+	void run_demo_notices(uint64_t now_us);
 	// The lossless layer on or off (RefinePause, gdp-spec.md §7.8): off,
 	// the host saves the hashing, the lossless bytes and, where it can,
 	// the per-frame readback. `save` records it as the menu's choice
@@ -614,6 +629,11 @@ private:
 	// The absolute-mode pointer is on the toolbar: it's shown as the local
 	// system cursor and nothing is forwarded (see set_pointer_on_toolbar).
 	bool pointer_on_toolbar_ = false;
+	// The pointer is over a toast: like the toolbar, spectre's, not the
+	// remote's (a click dismisses the toast).
+	bool pointer_on_notice_ = false;
+	// A prompt is up and holds the keyboard and pointer.
+	bool prompt_mode_ = false;
 	// SDL_BUTTON_MASK()s of the buttons forwarded to the remote as pressed
 	// and not yet released. A press on the toolbar or menu is never
 	// forwarded, so its release isn't either; and while one of these is
@@ -624,13 +644,18 @@ private:
 	// Refinement tile outlines (StreamOptions::debug_tile_outlines). Inert
 	// unless enabled, and only ever fed on a refined session.
 	TileDebugOverlay tile_debug_;
-	// Short notices: how to release the mouse when it was captured with a
-	// click (show_capture_mouse_hint()), the view, resolution and lossless
-	// changing, the toolbar's mute buttons.
-	Toast toast_;
-	// "Logging out..." from the LogoutRequest until the session ends. Its
-	// own Toast so that releasing the mouse, which takes toast_ down,
-	// can't take this one with it.
+	// Toasts and prompts in the top-right corner: how to release the mouse
+	// when it was captured with a click (show_capture_mouse_hint()), the
+	// view, resolution and lossless changing, the toolbar's mute buttons,
+	// files and security keys.
+	Notices notices_;
+	std::map<uint64_t, std::function<void(const PromptAnswer &)>> prompt_handlers_;
+	// spectre -Z's script: when it started, and the next step.
+	uint64_t demo_start_us_ = 0;
+	int demo_step_ = 0;
+	// "Logging out..." from the LogoutRequest until the session ends:
+	// centred rather than a corner toast, since it is the state of the
+	// whole session.
 	Toast logout_notice_;
 	// Last cursor scale logged, so a drag-resize doesn't log a line per
 	// pixel (see apply_cursor_scale).

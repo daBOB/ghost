@@ -167,12 +167,12 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	client_.on_file_list = [this](const gdp::session::FileList &list) { on_host_file_list(list); };
 	client_.on_file_fetch = [this](const gdp::session::FileFetch &fetch) { local_files_.answer(fetch); };
 	files_.on_uploaded = [this](const std::string &name, const std::string &where) {
-		toast_.show(where.empty() ? "Sent " + name : "Sent " + name + " to " + where, gdp::monotonic_us(),
+		notify(NoticeLevel::kSuccess, where.empty() ? "Sent " + name : "Sent " + name + " to " + where,
 			4000000);
 		mark_ui_dirty();
 	};
 	files_.on_failed = [this](const std::string &name, const std::string &why) {
-		toast_.show(name + ": " + why, gdp::monotonic_us(), 5000000);
+		notify(NoticeLevel::kError, name + ": " + why, 5000000);
 		mark_ui_dirty();
 	};
 	// Raw controllers (gdp-spec.md §8.6): the host's requests go to the
@@ -679,8 +679,20 @@ void StreamSession::main_loop() {
 		if (tile_debug_.expire(now_us)) {
 			mark_ui_dirty();
 		}
-		if (toast_.expire(now_us)) {
+		if (notices_.tick(now_us)) {
 			mark_ui_dirty();
+		}
+		for (const PromptAnswer &answer : notices_.take_answers()) {
+			auto it = prompt_handlers_.find(answer.id);
+			if (it != prompt_handlers_.end()) {
+				std::function<void(const PromptAnswer &)> done = std::move(it->second);
+				prompt_handlers_.erase(it);
+				done(answer);
+			}
+		}
+		sync_prompt_mode();
+		if (options_.demo_notices) {
+			run_demo_notices(now_us);
 		}
 		files_.tick(now_us);
 		if (next_my_scan_us_ != 0 && now_us >= next_my_scan_us_) {
@@ -788,8 +800,8 @@ void StreamSession::on_displays_changed(const DisplayInfo &display) {
 		std::string size = std::to_string(display_.width) + "x" + std::to_string(display_.height);
 		bool got_it = display_.width == requested_width_ && display_.height == requested_height_;
 		if (request_from_menu_) {
-			toast_.show(got_it ? "Resolution " + size : "The host kept " + size, gdp::monotonic_us(),
-				kToastUs);
+			notify(got_it ? NoticeLevel::kInfo : NoticeLevel::kWarning,
+				got_it ? "Resolution " + size : "The host kept " + size, kToastUs, "resolution");
 			if (changed) {
 				snap_window(); // fullscreen stays fullscreen; this sets the size it comes back to
 			}
@@ -1050,7 +1062,7 @@ void StreamSession::on_cursor_position(double x, double y) {
 	// Absolute mode already draws at the local pointer; a late report from
 	// before the toggle would just jerk it away from there. Likewise while
 	// the menu has temporarily taken the pointer local.
-	if (!relative_mouse_ || !window_ready_ || menu_.visible()) {
+	if (!relative_mouse_ || !window_ready_ || menu_.visible() || prompt_mode_) {
 		return;
 	}
 	remote_pointer_x_ = (float)x;
@@ -1061,7 +1073,7 @@ void StreamSession::on_cursor_position(double x, double y) {
 	VideoRect picture = picture_rect();
 	last_cursor_x_ = picture.x + (float)(x * picture.w);
 	last_cursor_y_ = picture.y + (float)(y * picture.h);
-	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible());
+	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible() && !prompt_mode_);
 	// Redraw now: in relative mode the overlay cursor is driven by these
 	// reports, not by a local pointer, and present() only runs on a
 	// decoded video frame -- without this the cursor visibly moves only
@@ -1144,6 +1156,10 @@ void StreamSession::handle_event(const SDL_Event &event) {
 		if (pointer_on_toolbar_) {
 			set_pointer_on_toolbar(false);
 		}
+		if (!prompt_mode_) {
+			notices_.handle_pointer_left();
+			pointer_on_notice_ = false;
+		}
 		mark_ui_dirty();
 		break;
 	case SDL_EVENT_WINDOW_EXPOSED:
@@ -1163,8 +1179,8 @@ void StreamSession::handle_event(const SDL_Event &event) {
 	case SDL_EVENT_CLIPBOARD_UPDATE: handle_clipboard_update(event.clipboard); break;
 	case SDL_EVENT_DROP_FILE: handle_drop_file(event.drop.data); break;
 	case SDL_EVENT_MOUSE_WHEEL:
-		if (menu_.visible() || pointer_on_toolbar_) {
-			break; // the menu or toolbar has the pointer
+		if (menu_.visible() || pointer_on_toolbar_ || pointer_on_notice_ || prompt_mode_) {
+			break; // the menu, toolbar or a notice has the pointer
 		}
 		// gdp-spec.md §8.2: positive horizontal is right (SDL's too),
 		// positive vertical is down (SDL's is up).
@@ -1441,7 +1457,7 @@ void StreamSession::rescan_security_keys() {
 		});
 		keys_[i] = std::move(key);
 		key_policy_[i] = gdp::KeyPolicy{};
-		toast_.show("Security key forwarded: " + id.name, gdp::monotonic_us(), kToastUs);
+		notify(NoticeLevel::kInfo, "Security key forwarded: " + id.name, kToastUs);
 		mark_ui_dirty();
 	}
 }
@@ -1462,9 +1478,8 @@ void StreamSession::relay_security_key_packet(uint32_t i, const std::string &pac
 	if (verdict.refused) {
 		SLOG_ERROR("spectre: security key \"%s\": the host tried to %s; refused", name.c_str(),
 			verdict.refused_what.c_str());
-		toast_.show("The host tried to " + verdict.refused_what +
-				" -- refused. Manage security keys on this computer.",
-			gdp::monotonic_us(), kToastUs);
+		notify(NoticeLevel::kWarning, "The host tried to " + verdict.refused_what, kToastUs, "key-request",
+			"Refused. Manage security keys on this computer.");
 		mark_ui_dirty();
 		return;
 	}
@@ -1485,7 +1500,7 @@ void StreamSession::relay_security_key_packet(uint32_t i, const std::string &pac
 		break;
 	}
 	SLOG_INFO("spectre: security key \"%s\": %s", name.c_str(), message.c_str());
-	toast_.show(message, gdp::monotonic_us(), kToastUs);
+	notify(NoticeLevel::kInfo, message, kToastUs, "key-request");
 	mark_ui_dirty();
 }
 
@@ -1497,7 +1512,7 @@ void StreamSession::on_security_key_rejected(uint32_t i, const std::string &reas
 	SLOG_ERROR("spectre: the host refused security key \"%s\" (%s)", name.c_str(), reason.c_str());
 	refused_keys_.insert(keys_[i]->identity().path);
 	keys_[i].reset();
-	toast_.show("The host refused " + name, gdp::monotonic_us(), 5000000);
+	notify(NoticeLevel::kWarning, "The host refused " + name, 5000000);
 	mark_ui_dirty();
 }
 
@@ -1808,7 +1823,7 @@ void StreamSession::handle_drop_file(const char *path) {
 		return;
 	}
 	if (!client_.file_enabled()) {
-		toast_.show("This host doesn't take files", gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kWarning, "This host doesn't take files", 3000000);
 		mark_ui_dirty();
 		return;
 	}
@@ -1819,14 +1834,23 @@ void StreamSession::handle_drop_file(const char *path) {
 		if (slash != std::string::npos) {
 			name.erase(0, slash + 1);
 		}
-		toast_.show(name + ": " + error, gdp::monotonic_us(), 4000000);
+		notify(NoticeLevel::kError, name + ": " + error, 4000000);
 	} else {
-		toast_.show("Sending to the host...", gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo, "Sending to the host...", 3000000);
 	}
 	mark_ui_dirty();
 }
 
 void StreamSession::handle_key(const SDL_KeyboardEvent &key) {
+	// A prompt owns the keyboard ahead of everything, the menu chord
+	// included: nothing is forwarded, and the menu can't open over it.
+	if (prompt_mode_ || notices_.prompt_visible()) {
+		if (key.down && !key.repeat) {
+			notices_.handle_key(key.scancode, gdp::monotonic_us());
+			mark_ui_dirty();
+		}
+		return;
+	}
 	// The menu chord first, so it works whether or not the menu is up
 	// (it toggles). Checked on the key-down that completes it: SDL has
 	// already recorded this key in its keyboard state by the time the
@@ -1898,6 +1922,12 @@ void StreamSession::handle_key(const SDL_KeyboardEvent &key) {
 }
 
 void StreamSession::handle_mouse_motion(const SDL_MouseMotionEvent &motion) {
+	if (prompt_mode_) {
+		// As for the menu: the pointer is local and drives the prompt.
+		move_local_cursor(motion.x, motion.y);
+		notices_.handle_pointer_motion(last_cursor_x_, last_cursor_y_);
+		return;
+	}
 	if (menu_.visible()) {
 		// Pointer is local while the menu is up (relative mode was
 		// suspended in open_menu()): move the overlay, hover the rows,
@@ -1921,10 +1951,20 @@ void StreamSession::pointer_moved_to(float x, float y) {
 	// a release lost to a focus change can't leave the toolbar dead.
 	bool dragging = (forwarded_buttons_ & SDL_GetMouseState(nullptr, nullptr)) != 0;
 	bool on_toolbar = !dragging && toolbar_.handle_pointer_motion(x * density, y * density);
-	if (on_toolbar != pointer_on_toolbar_) {
-		set_pointer_on_toolbar(on_toolbar);
+	// A toast under the pointer is spectre's too, so whatever it covers on
+	// the remote is one click (dismissing it) away rather than unreachable.
+	bool on_notice = false;
+	if (on_toolbar || dragging) {
+		notices_.handle_pointer_left();
+	} else {
+		on_notice = notices_.handle_pointer_motion(x * density, y * density);
 	}
-	if (on_toolbar) {
+	if (on_toolbar != pointer_on_toolbar_ || on_notice != pointer_on_notice_) {
+		pointer_on_notice_ = on_notice;
+		set_pointer_on_toolbar(on_toolbar || on_notice);
+		pointer_on_toolbar_ = on_toolbar;
+	}
+	if (on_toolbar || on_notice) {
 		stop_edge_push();
 		mark_ui_dirty(); // hover highlight
 		return;
@@ -1996,11 +2036,32 @@ void StreamSession::handle_mouse_button(const SDL_MouseButtonEvent &button) {
 		return;
 	}
 	float density = pixel_density();
+	if (prompt_mode_) {
+		if (button.button == SDL_BUTTON_LEFT) {
+			notices_.handle_pointer_press(button.x * density, button.y * density, gdp::monotonic_us());
+			mark_ui_dirty();
+		}
+		return;
+	}
 	if (menu_.visible()) {
 		if (button.button == SDL_BUTTON_LEFT) {
 			apply_menu_action(menu_.handle_pointer_press(button.x * density, button.y * density));
 		}
 		return;
+	}
+	if (pointer_on_notice_ && !relative_mouse_) {
+		// A click on a toast dismisses it; it never reaches the remote. The
+		// toast may have run out under a still pointer: then the click is
+		// the remote's after all.
+		if (notices_.handle_pointer_motion(button.x * density, button.y * density)) {
+			if (button.button == SDL_BUTTON_LEFT) {
+				notices_.handle_pointer_press(button.x * density, button.y * density, gdp::monotonic_us());
+			}
+			mark_ui_dirty();
+			return;
+		}
+		pointer_on_notice_ = false;
+		set_pointer_on_toolbar(pointer_on_toolbar_);
 	}
 	if (pointer_on_toolbar_ && !relative_mouse_) {
 		if (button.button == SDL_BUTTON_LEFT) {
@@ -2029,14 +2090,14 @@ void StreamSession::toggle_capture_mouse() {
 		}
 	} else {
 		// Releasing by any route retires the hint for releasing.
-		toast_.hide();
+		notices_.hide("capture-mouse");
 		mark_ui_dirty();
 		// Park the local pointer where wraith's ended up, so the first
 		// absolute motion continues from there instead of jumping back to
 		// wherever SDL restored it (the position from before the toggle).
 		SDL_WarpMouseInWindow(window_, last_cursor_x_ / pixel_density(), last_cursor_y_ / pixel_density());
 	}
-	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible());
+	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible() && !prompt_mode_);
 }
 
 float StreamSession::pixel_density() const {
@@ -2060,7 +2121,7 @@ void StreamSession::move_local_cursor(float x, float y) {
 	last_cursor_x_ = x * density;
 	last_cursor_y_ = y * density;
 	// The menu has the local pointer, as the toolbar does (open_menu()).
-	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible());
+	presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, !menu_.visible() && !prompt_mode_);
 	mark_ui_dirty(); // the overlay cursor moved; see mark_ui_dirty()'s comment
 }
 
@@ -2458,21 +2519,23 @@ void StreamSession::apply_menu_action(MenuAction action) {
 	case MenuAction::kToggleLossless:
 		close_menu();
 		set_lossless(!lossless_, true);
-		toast_.show(lossless_ ? "Lossless refinement on: still text and images become pixel-exact"
-							  : "Lossless refinement off",
-			gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo,
+			lossless_ ? "Lossless refinement on: still text and images become pixel-exact"
+					  : "Lossless refinement off",
+			3000000, "lossless");
 		break;
 	case MenuAction::kTogglePresentation:
 		close_menu();
 		if (!presenter_.supports_low_latency()) {
-			toast_.show("This display only presents smooth: every frame waits for vsync", gdp::monotonic_us(),
-				3000000);
+			notify(NoticeLevel::kInfo, "This display only presents smooth: every frame waits for vsync",
+				3000000, "presentation");
 			break;
 		}
 		set_low_latency(!presenter_.low_latency(), true);
-		toast_.show(presenter_.low_latency() ? "Presentation: low latency, always the newest frame"
-											 : "Presentation: smooth, every frame waits its turn for vsync",
-			gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo,
+			presenter_.low_latency() ? "Presentation: low latency, always the newest frame"
+									 : "Presentation: smooth, every frame waits its turn for vsync",
+			3000000, "presentation");
 		break;
 	case MenuAction::kToggleFullscreen:
 		toggle_fullscreen();
@@ -2481,16 +2544,16 @@ void StreamSession::apply_menu_action(MenuAction action) {
 	case MenuAction::kToggleControllerMode:
 		close_menu();
 		set_raw_gamepads(!options_.raw_gamepads);
-		toast_.show(options_.raw_gamepads ? "Controllers: raw, each as itself"
-										  : "Controllers: Xbox emulation",
-			gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo,
+			options_.raw_gamepads ? "Controllers: raw, each as itself" : "Controllers: Xbox emulation",
+			3000000, "controllers");
 		break;
 	case MenuAction::kToggleActualSize:
 		close_menu();
 		set_actual_size(!actual_size_, true);
-		toast_.show(actual_size_ ? "Actual size: push the pointer against an edge to scroll"
-								 : "Fit to window",
-			gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo,
+			actual_size_ ? "Actual size: push the pointer against an edge to scroll" : "Fit to window",
+			3000000, "view");
 		break;
 	case MenuAction::kSensitivityChanged:
 		prefs_.mouse_sensitivity = menu_.mouse_sensitivity();
@@ -2520,9 +2583,10 @@ void StreamSession::apply_menu_action(MenuAction action) {
 	case MenuAction::kChangeResolution:
 		request_resolution(menu_.chosen_width(), menu_.chosen_height(), true);
 		close_menu();
-		toast_.show("Changing resolution to " + std::to_string(requested_width_) + "x" +
+		notify(NoticeLevel::kInfo,
+			"Changing resolution to " + std::to_string(requested_width_) + "x" +
 				std::to_string(requested_height_) + "...",
-			gdp::monotonic_us(), 5000000);
+			5000000, "resolution");
 		mark_ui_dirty();
 		break;
 	case MenuAction::kDisconnect:
@@ -2538,8 +2602,8 @@ void StreamSession::apply_menu_action(MenuAction action) {
 void StreamSession::toggle_speaker_mute(bool announce) {
 	audio_player_.set_muted(!audio_player_.muted());
 	if (announce) {
-		toast_.show(audio_player_.muted() ? "Session audio muted" : "Session audio on", gdp::monotonic_us(),
-			3000000);
+		notify(NoticeLevel::kInfo, audio_player_.muted() ? "Session audio muted" : "Session audio on",
+			3000000, "speaker");
 	}
 	SLOG_INFO("spectre: session audio %s", audio_player_.muted() ? "muted" : "unmuted");
 	mark_ui_dirty();
@@ -2548,8 +2612,8 @@ void StreamSession::toggle_speaker_mute(bool announce) {
 void StreamSession::toggle_mic_mute(bool announce) {
 	microphone_.set_muted(!microphone_.muted());
 	if (announce) {
-		toast_.show(microphone_.muted() ? "Session microphone muted" : "Session microphone on",
-			gdp::monotonic_us(), 3000000);
+		notify(NoticeLevel::kInfo, microphone_.muted() ? "Session microphone muted" : "Session microphone on",
+			3000000, "mic");
 	}
 	SLOG_INFO("spectre: microphone %s", microphone_.muted() ? "muted" : "unmuted");
 	mark_ui_dirty();
@@ -2572,7 +2636,7 @@ void StreamSession::request_logout() {
 	if (menu_.visible()) {
 		close_menu();
 	}
-	toast_.hide();
+	notices_.clear_toasts();
 	logout_notice_.show("Logging out... waiting for the host to end the session");
 	mark_ui_dirty();
 }
@@ -2661,10 +2725,141 @@ void StreamSession::snap_window() {
 void StreamSession::show_capture_mouse_hint() {
 	constexpr uint64_t kHintUs = 4000000;
 	if (relative_mouse_ && !logout_requested_) {
-		toast_.show(std::string("Press ") + kCaptureMouseKeyName + " to release the mouse",
-			gdp::monotonic_us(), kHintUs);
+		notify(NoticeLevel::kInfo, std::string("Press ") + kCaptureMouseKeyName + " to release the mouse",
+			kHintUs, "capture-mouse");
 		mark_ui_dirty();
 	}
+}
+
+void StreamSession::notify(NoticeLevel level, std::string title, uint64_t duration_us, std::string tag,
+	std::string body) {
+	ToastSpec spec;
+	spec.level = level;
+	spec.title = std::move(title);
+	spec.body = std::move(body);
+	spec.duration_us = duration_us;
+	spec.tag = std::move(tag);
+	notices_.toast(std::move(spec), gdp::monotonic_us());
+	mark_ui_dirty();
+}
+
+void StreamSession::ask(PromptSpec spec, std::function<void(const PromptAnswer &)> done) {
+	uint64_t id = notices_.prompt(std::move(spec), gdp::monotonic_us());
+	prompt_handlers_[id] = std::move(done);
+	sync_prompt_mode();
+	mark_ui_dirty();
+}
+
+void StreamSession::sync_prompt_mode() {
+	bool want = notices_.prompt_visible();
+	if (want == prompt_mode_) {
+		return;
+	}
+	prompt_mode_ = want;
+	if (want) {
+		// What open_menu() does to take the input, and the menu itself
+		// goes: the prompt is what needs answering.
+		if (menu_.visible()) {
+			close_menu();
+		}
+		stop_edge_push();
+		release_forwarded_keys();
+		toolbar_.handle_pointer_left();
+		pointer_on_toolbar_ = false;
+		pointer_on_notice_ = false;
+		if (relative_mouse_) {
+			SDL_SetWindowRelativeMouseMode(window_, false);
+			SDL_WarpMouseInWindow(window_, last_cursor_x_ / pixel_density(),
+				last_cursor_y_ / pixel_density());
+		}
+		float x = 0.0f, y = 0.0f;
+		SDL_GetMouseState(&x, &y);
+		move_local_cursor(x, y);
+		notices_.handle_pointer_motion(last_cursor_x_, last_cursor_y_);
+		SDL_ShowCursor();
+		presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, false);
+	} else {
+		// As close_menu(): relative mode comes back if it was on.
+		if (relative_mouse_) {
+			SDL_SetWindowRelativeMouseMode(window_, true);
+		}
+		SDL_HideCursor();
+		presenter_.set_cursor_position(last_cursor_x_, last_cursor_y_, true);
+		if (!relative_mouse_) {
+			float x = 0.0f, y = 0.0f;
+			SDL_GetMouseState(&x, &y);
+			pointer_moved_to(x, y);
+		}
+	}
+	mark_ui_dirty();
+}
+
+// spectre -Z: what the notices look like in a real session. Each step runs
+// once, at its time after the first call; the prompts' answers come back
+// as toasts and change nothing else.
+void StreamSession::run_demo_notices(uint64_t now_us) {
+	constexpr uint64_t kSec = 1000000;
+	if (demo_start_us_ == 0) {
+		demo_start_us_ = now_us;
+	}
+	uint64_t t = now_us - demo_start_us_;
+	auto report = [this](const std::string &what) {
+		return [this, what](const PromptAnswer &a) {
+			SLOG_INFO("spectre: demo prompt \"%s\": %s", what.c_str(),
+				a.timed_out ? "timed out" : (a.allowed ? "allowed" : "denied"));
+			if (a.timed_out) {
+				notify(NoticeLevel::kWarning, what + ": no answer, denied", 10 * kSec);
+			} else if (a.allowed) {
+				notify(NoticeLevel::kSuccess, what + ": allowed", 10 * kSec);
+			} else {
+				notify(NoticeLevel::kInfo, what + ": denied", 10 * kSec);
+			}
+		};
+	};
+	switch (demo_step_) {
+	case 0:
+		if (t < 2 * kSec) {
+			return;
+		}
+		notify(NoticeLevel::kInfo, "Session audio muted", 6 * kSec, "speaker");
+		break;
+	case 1:
+		if (t < 3 * kSec) {
+			return;
+		}
+		notify(NoticeLevel::kSuccess, "Sent quarterly-report-2025.pdf", 8 * kSec, {}, "to Downloads");
+		break;
+	case 2:
+		if (t < 4 * kSec) {
+			return;
+		}
+		notify(NoticeLevel::kWarning, "The host tried to reset YubiKey 5C NFC", 12 * kSec, {},
+			"Refused. Manage security keys on this computer.");
+		break;
+	case 3:
+		if (t < 5 * kSec) {
+			return;
+		}
+		notify(NoticeLevel::kError, "report.pdf: permission denied", 12 * kSec);
+		break;
+	case 4:
+		if (t < 9 * kSec) {
+			return;
+		}
+		ask({NoticeLevel::kWarning, "Erase this security key?",
+				"The host wants to reset YubiKey 5C NFC. This erases every passkey on it and its PIN, and "
+				"can't be undone.",
+				"Erase", "Keep", 30 * kSec},
+			report("Erase YubiKey 5C NFC"));
+		ask({NoticeLevel::kWarning, "Generate a new key in PIV slot 9a?",
+				"The host wants to replace the authentication key on YubiKey 5C NFC. Anything that signs in "
+				"with the old key stops working.",
+				"Replace", "Keep", 20 * kSec},
+			report("Replace the PIV key"));
+		break;
+	default: return;
+	}
+	demo_step_++;
 }
 
 void StreamSession::release_forwarded_keys() {
@@ -2723,7 +2918,7 @@ void StreamSession::rebuild_ui() {
 		audio_player_.is_open() ? std::optional<bool>(audio_player_.muted()) : std::nullopt);
 	toolbar_.set_mic_muted(microphone_.is_open() ? std::optional<bool>(microphone_.muted()) : std::nullopt);
 	toolbar_.build(ui_, ui_font_, win_w, win_h);
-	toast_.build(ui_, ui_font_, win_w, win_h, video.y);
+	notices_.build(ui_, ui_font_, win_w, win_h, video.y, gdp::monotonic_us());
 	logout_notice_.build(ui_, ui_font_, win_w, win_h, video.y);
 	menu_.build(ui_, ui_font_, win_w, win_h);
 	presenter_.set_ui(ui_);

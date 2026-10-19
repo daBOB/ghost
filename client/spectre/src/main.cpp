@@ -73,6 +73,7 @@ static void usage(const char *argv0) {
 	printf("            Default: whichever the session menu last picked, on at first\n");
 	printf("  -D        debug: briefly outline every lossless refinement tile in red as it lands,\n");
 	printf("            so it's visible which regions the host is refreshing losslessly\n");
+	printf("  -Z        debug: play sample notices and prompts a few seconds into the session\n");
 	printf("  -G        forward gamepads: local controllers are mirrored onto the host, if it\n");
 	printf("            supports that -- raw where the controller and host allow (the host's own\n");
 	printf("            driver for it, touchpad, motion, lights, rumble, Steam Input), otherwise as\n");
@@ -220,6 +221,8 @@ int main(int argc, char *argv[]) {
 			}
 		} else if (strcmp(arg, "-D") == 0) {
 			options.debug_tile_outlines = true;
+		} else if (strcmp(arg, "-Z") == 0) {
+			options.demo_notices = true;
 		} else if (strcmp(arg, "-G") == 0) {
 			options.forward_gamepads = true;
 		} else if (strcmp(arg, "-g") == 0) {
