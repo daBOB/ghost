@@ -387,9 +387,16 @@ struct Fields {
 	std::string rp_hash;       // credential management's params, 1
 };
 
-// `sub_key` is where the subcommand sits: 2 in ClientPIN and bio
-// enrolment's maps, 1 in credential management's and config's.
-Fields read_fields(const std::vector<uint8_t> &data, int64_t sub_key, bool credential_params) {
+// Which request a map is, since the same key means different things in
+// each: 6 is bio enrolment's getModality flag but ClientPIN's encrypted
+// PIN hash, which every PIN-gated sign-in sends.
+enum class Shape { kClientPin, kCredentialManagement, kBioEnrollment, kConfig };
+
+Fields read_fields(const std::vector<uint8_t> &data, Shape shape) {
+	// The subcommand sits at 2 in ClientPIN's and bio enrolment's maps, at
+	// 1 in credential management's and config's.
+	const int64_t sub_key = shape == Shape::kClientPin || shape == Shape::kBioEnrollment ? 0x02 : 0x01;
+	const bool credential_params = shape == Shape::kCredentialManagement;
 	Fields f;
 	Cbor cbor(data.data() + 1, data.size() - 1);
 	f.ok = cbor.map([&](int64_t k) {
@@ -398,7 +405,7 @@ Fields read_fields(const std::vector<uint8_t> &data, int64_t sub_key, bool crede
 			f.has_sub = cbor.head(&major, &f.sub) && major == 0;
 			return f.has_sub;
 		}
-		if (k == 0x06 && sub_key == 0x02) { // bio enrolment's getModality
+		if (k == 0x06 && shape == Shape::kBioEnrollment) { // getModality
 			return cbor.boolean(&f.get_modality);
 		}
 		if (credential_params && k == 0x02) {
@@ -477,7 +484,7 @@ void KeyPolicy::decide(const Message &m, uint64_t now_us, KeyVerdict *verdict) {
 	case kLargeBlobs: pass(m, verdict); return;
 
 	case kClientPin: {
-		Fields f = read_fields(m.data, 0x02, false);
+		Fields f = read_fields(m.data, Shape::kClientPin);
 		if (!f.ok || !f.has_sub) {
 			refuse("set or change its PIN");
 		} else if (f.sub == kPinSet) {
@@ -502,7 +509,7 @@ void KeyPolicy::decide(const Message &m, uint64_t now_us, KeyVerdict *verdict) {
 
 	case kCredentialManagement:
 	case kCredentialManagementPre: {
-		Fields f = read_fields(m.data, 0x01, true);
+		Fields f = read_fields(m.data, Shape::kCredentialManagement);
 		if (!f.ok || !f.has_sub) {
 			refuse("manage its passkeys");
 			return;
@@ -536,7 +543,7 @@ void KeyPolicy::decide(const Message &m, uint64_t now_us, KeyVerdict *verdict) {
 
 	case kBioEnrollment:
 	case kBioEnrollmentPre: {
-		Fields f = read_fields(m.data, 0x02, false);
+		Fields f = read_fields(m.data, Shape::kBioEnrollment);
 		if (!f.ok) {
 			refuse("enrol fingerprints on it");
 			return;
@@ -577,7 +584,7 @@ void KeyPolicy::decide(const Message &m, uint64_t now_us, KeyVerdict *verdict) {
 	}
 
 	case kConfig: {
-		Fields f = read_fields(m.data, 0x01, false);
+		Fields f = read_fields(m.data, Shape::kConfig);
 		if (!f.ok || !f.has_sub) {
 			refuse("change its configuration");
 		} else if (f.sub == kConfigToggleAlwaysUv) {

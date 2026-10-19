@@ -154,6 +154,41 @@ bool asked(gdp::KeyPolicy &w, const std::vector<Bytes> &ps, uint64_t now, gdp::K
 	return v->ask;
 }
 
+// A COSE key, as ClientPIN's keyAgreement (3) carries: negative-integer
+// keys, so a parser that steps over it must not insist on unsigned ones.
+Bytes cose_key() {
+	auto neg = [](uint64_t n) { return head(1, n - 1); }; // CBOR -n
+	return map(5,
+		{cint(1), cint(2), cint(3), neg(25), neg(1), cint(1), neg(2), bytes(32), neg(3), bytes(32)});
+}
+
+// ClientPIN as a FIDO client sends it, with the fields each subcommand
+// carries: 3 keyAgreement, 4 pinUvAuthParam, 5 newPinEnc, 6 pinHashEnc,
+// 9 permissions, 10 rpId.
+Bytes real_client_pin(uint64_t sub) {
+	switch (sub) {
+	case 3: // setPIN
+		return cat({{0x06},
+			map(5,
+				{cint(1), cint(2), cint(2), cint(3), cint(3), cose_key(), cint(4), bytes(16), cint(5),
+					bytes(64)})});
+	case 4: // changePIN
+		return cat({{0x06},
+			map(6,
+				{cint(1), cint(2), cint(2), cint(4), cint(3), cose_key(), cint(4), bytes(16), cint(5),
+					bytes(64), cint(6), bytes(16)})});
+	case 5: // getPinToken
+		return cat(
+			{{0x06}, map(4, {cint(1), cint(2), cint(2), cint(5), cint(3), cose_key(), cint(6), bytes(16)})});
+	case 9: // getPinUvAuthTokenUsingPinWithPermissions
+		return cat({{0x06},
+			map(6,
+				{cint(1), cint(2), cint(2), cint(9), cint(3), cose_key(), cint(6), bytes(16), cint(9),
+					cint(3), cint(10), text("github.com")})});
+	default: return client_pin(sub);
+	}
+}
+
 Bytes cm(uint64_t sub) {
 	return cat({{0x0a}, map(1, {cint(1), cint(sub)})});
 }
@@ -161,6 +196,20 @@ Bytes cm(uint64_t sub) {
 void test_consent() {
 	const uint64_t t0 = 1000000000;
 	gdp::KeyVerdict v;
+
+	// Real-shaped ClientPIN: the PIN tokens a PIN-gated sign-in fetches
+	// pass unasked, whatever else their map holds (6, the PIN hash, is not
+	// bio enrolment's getModality here); setting and changing the PIN ask.
+	for (uint64_t sub : {5, 9}) {
+		gdp::KeyPolicy w(t0, true);
+		gdp::KeyVerdict pv;
+		assert(feed_all(w, packets(1, 0x90, real_client_pin(sub)), &pv) && !pv.ask && !pv.refused);
+	}
+	for (uint64_t sub : {3, 4}) {
+		gdp::KeyPolicy w(t0, true);
+		assert(asked(w, packets(1, 0x90, real_client_pin(sub)), t0, &v));
+		assert(v.consent.kind == (sub == 3 ? gdp::KeyConsent::kSetPin : gdp::KeyConsent::kChangePin));
+	}
 
 	// What's asked about, and what kind of consent each is.
 	struct Case {
