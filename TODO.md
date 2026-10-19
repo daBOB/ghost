@@ -64,11 +64,11 @@ Limitations section.
 ## Client
 
 - Security keys (gdp-spec.md §8.7, ADR 0015) are tested end to end on
-  Linux only, spectre and the session on one host (a YubiKey 5, Chrome
-  sign-in on webauthn.io). Untested: a Wisp thin client (whether the
-  kiosk user can open the key's hidraw node), macOS's IOHID path, a key
-  unplugged and replugged mid-session, two keys at once, and a session
-  through Veil's gateway.
+  Linux only (a YubiKey 5: a browser sign-in in a session on another
+  host, and the key unplugged and replugged mid-session). Untested: a
+  Wisp thin client (whether the kiosk user can open the key's hidraw
+  node), macOS's IOHID path, two keys at once, and a session through
+  Veil's gateway.
 - Security keys on Windows: spectre can't open a FIDO HID device without
   elevation (Windows 10 1903 on). Plan (ADR 0015): a helper service the
   installer adds, as LocalSystem, that opens the keys and relays their
