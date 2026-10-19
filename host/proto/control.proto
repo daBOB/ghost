@@ -43,9 +43,9 @@ message SessionInit {
   // directory is missing or fails that check. wraith checks the profile
   // it execs the same way, whoever named the directory.
   string sessions_dir = 6;
-  // Whether CreateDevice can make KIND_HID devices: /dev/uhid exists and
-  // the udev rule is installed. wraith offers "hid" only when it is (and
-  // "gamepad" with it).
+  // Whether CreateDevice can make KIND_HID and KIND_SECURITY_KEY devices:
+  // /dev/uhid exists and the udev rule is installed. wraith offers "hid"
+  // (and "gamepad" with it) and "security-key" only when it is.
   bool uhid_available = 7;
 }
 
@@ -67,18 +67,28 @@ message SessionInit {
 // DeviceVerified -- or a ControlError, having destroyed the device.
 // wraith answers the driver's requests meanwhile; input reports are held
 // back until DeviceVerified, by wraith and by the relay.
+//
+// KIND_SECURITY_KEY goes the same way, but ghostseat sets the descriptor
+// (gdp-spec.md §8.7's, whatever the key's own) and answers the driver's
+// report requests itself: wraith only relays the key's packets.
 message CreateDevice {
   enum Kind {
     KIND_UNSPECIFIED = 0;
-    KIND_GAMEPAD = 1;  // an Xbox-360-layout uinput gamepad
-    KIND_HID = 2;      // a uhid device with `hid`'s identity and descriptor
+    KIND_GAMEPAD = 1;       // an Xbox-360-layout uinput gamepad
+    KIND_HID = 2;           // a uhid device with `hid`'s identity and descriptor
+    KIND_SECURITY_KEY = 3;  // a uhid FIDO device with ghostseat's own descriptor
   }
   Kind kind = 1;
-  uint32 index = 2;  // slot, [0, 4): appears in the device's phys string
+  // Slot, [0, 4) for gamepads and raw controllers, [0, 2) for security
+  // keys: appears in the device's phys string.
+  uint32 index = 2;
   // KIND_GAMEPAD: for ghostseat's log line only; the device's own name is
-  // fixed. KIND_HID: the device's name (HidConnect.name).
+  // fixed. KIND_HID and KIND_SECURITY_KEY: the device's name
+  // (HidConnect.name, SecurityKeyConnect.name).
   string name = 3;
-  HidIdentity hid = 4;  // KIND_HID only
+  // KIND_HID: all of it. KIND_SECURITY_KEY: vendor_id, product_id and
+  // version only; the rest must be unset.
+  HidIdentity hid = 4;
 }
 
 // gdp-spec.md §8.6's HidConnect, minus the slot and name.
@@ -97,9 +107,9 @@ message DeviceCreated {
   string node = 1;   // what the device became, for logs: the uinput sysname or the uhid phys
 }
 
-// ghostseat -> wraith, after DeviceCreated for KIND_HID: the driver bound
-// and every input device it made passed ghostseat's policy. Input reports
-// may flow from here on.
+// ghostseat -> wraith, after DeviceCreated for KIND_HID or
+// KIND_SECURITY_KEY: the driver bound and every input device it made
+// passed ghostseat's policy. Input reports may flow from here on.
 message DeviceVerified {
   string driver = 1;  // the driver that bound, for logs
 }

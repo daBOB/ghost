@@ -29,7 +29,7 @@
 // Output events from a uhid device go back the same way. wraith closing
 // its end destroys the device.
 //
-// Two kinds:
+// Three kinds:
 // - KIND_GAMEPAD, a uinput Xbox 360-layout pad (gdp-spec.md §8.5).
 // - KIND_HID, a uhid device with the client controller's own identity
 //   and report descriptor (§8.6), so the host's own driver for it binds.
@@ -38,6 +38,12 @@
 //   runs at once; ghostseat waits for the driver's bind, checks what the
 //   driver created, and destroys the device if it isn't a game
 //   controller (verify_hid).
+// - KIND_SECURITY_KEY, a uhid FIDO device (§8.7, ADR 0015) with the
+//   client key's vendor, product and name but FIDO_DESCRIPTOR, never the
+//   client's. Only hid-generic may bind and it must make no input device
+//   (verify_security_key); the relay passes only 64-byte CTAPHID packets
+//   in and output reports out, and fails the driver's GET_REPORT and
+//   SET_REPORT itself, since CTAPHID uses neither.
 //
 // Nodes are chowned from a udev monitor (monitor_loop) rather than per
 // device: the chown must come *after* udev has applied the rule (the
@@ -87,6 +93,8 @@ const RULE_PATHS: [&str; 2] = ["/usr/lib/udev/rules.d/72-ghost-input.rules", "/e
 const RULE_HID_MARKER: &str = "HID_PHYS=ghost/";
 // libgdp's gdp::kMaxGamepads: slots a client may name.
 pub const MAX_GAMEPADS: u32 = 4;
+// gdp-spec.md §8.7's security-key slots.
+pub const MAX_SECURITY_KEYS: u32 = 2;
 // What the udev rule keys on (ATTRS{phys}=="ghost/*", and HID_PHYS for
 // uhid), and what it sets (ENV{ID_SEAT}="ghost") -- checked on each event
 // as proof the rule ran.
@@ -165,7 +173,14 @@ const DEVICE_NAME: &str = "Ghost Gamepad";
 // linux/uhid.h. Every event is a u32 type and a packed union; writes
 // may be shorter than the union, reads return at most UHID_EVENT_SIZE.
 const UHID_DESTROY: u32 = 1;
+const UHID_START: u32 = 2;
+const UHID_STOP: u32 = 3;
+const UHID_OPEN: u32 = 4;
+const UHID_CLOSE: u32 = 5;
+const UHID_OUTPUT: u32 = 6;
+const UHID_GET_REPORT: u32 = 9;
 const UHID_CREATE2: u32 = 11;
+const UHID_SET_REPORT: u32 = 13;
 // What wraith may write: an input report, and the replies to the
 // driver's GET_REPORT / SET_REPORT requests.
 const UHID_GET_REPORT_REPLY: u32 = 10;
@@ -181,6 +196,34 @@ const UHID_UNIQ_LEN: usize = 64;
 pub const HID_MAX_DESCRIPTOR_SIZE: usize = 4096;
 const BUS_USB: u32 = 0x03;
 const BUS_BLUETOOTH: u32 = 0x05;
+
+// gdp-spec.md §8.7: every security key is presented with this, the FIDO
+// Alliance page's CTAPHID collection with 64-byte input and output
+// reports and no report IDs -- what every key in use reports anyway, so
+// nothing the client sends reaches the kernel's HID parser.
+const FIDO_DESCRIPTOR: [u8; 34] = [
+    0x06, 0xd0, 0xf1, // Usage Page (FIDO Alliance)
+    0x09, 0x01, // Usage (CTAPHID)
+    0xa1, 0x01, // Collection (Application)
+    0x09, 0x20, //   Usage (Input Report Data)
+    0x15, 0x00, //   Logical Minimum (0)
+    0x26, 0xff, 0x00, //   Logical Maximum (255)
+    0x75, 0x08, //   Report Size (8)
+    0x95, 0x40, //   Report Count (64)
+    0x81, 0x02, //   Input (Data, Var, Abs)
+    0x09, 0x21, //   Usage (Output Report Data)
+    0x15, 0x00, //   Logical Minimum (0)
+    0x26, 0xff, 0x00, //   Logical Maximum (255)
+    0x75, 0x08, //   Report Size (8)
+    0x95, 0x40, //   Report Count (64)
+    0x91, 0x02, //   Output (Data, Var, Abs)
+    0xc0, // End Collection
+];
+// A CTAPHID packet: one report of FIDO_DESCRIPTOR's.
+const FIDO_PACKET: usize = 64;
+// The only driver that may bind to a security key: FIDO_DESCRIPTOR gives
+// it nothing to map, so it makes a hidraw node and no input device.
+const SECURITY_KEY_DRIVER: &str = "hid-generic";
 
 // What a raw controller may bind to (the hid_driver's name, as the
 // device's DRIVER property shows it). Everything else -- vendor drivers
@@ -219,8 +262,8 @@ pub fn available() -> bool {
     Path::new(UINPUT_PATH).exists() && rule_text().is_some() && MONITOR_RUNNING.load(Ordering::Relaxed)
 }
 
-/// The same for KIND_HID: /dev/uhid, and a rule with its uhid line. Gates
-/// the "hid" capability.
+/// The same for KIND_HID and KIND_SECURITY_KEY: /dev/uhid, and a rule
+/// with its uhid line. Gates the "hid" and "security-key" capabilities.
 pub fn uhid_available() -> bool {
     Path::new(UHID_PATH).exists()
         && rule_text().is_some_and(|t| t.contains(RULE_HID_MARKER))
@@ -246,6 +289,9 @@ pub fn log_availability() {
         if available() || uhid_available() {
             info!(standard = available(), raw = uhid_available(), "devices: gamepad forwarding available");
         }
+        if uhid_available() {
+            info!("devices: security-key forwarding available");
+        }
     }
 }
 
@@ -258,12 +304,14 @@ fn rule_text() -> Option<String> {
 /// is enforced here, not trusted to wraith: a create for an occupied
 /// slot cancels the task serving it (which drops the device fd and so
 /// destroys the device) and waits for it to be gone before creating.
-/// With MAX_GAMEPADS slots per kind that is also the bound on tasks in
-/// flight, raw-controller creates waiting on BIND_WAIT included.
+/// With MAX_GAMEPADS slots per kind (MAX_SECURITY_KEYS for keys) that is
+/// also the bound on tasks in flight, uhid creates waiting on BIND_WAIT
+/// included.
 #[derive(Default)]
 struct Slots {
     gamepad: [Option<Slot>; MAX_GAMEPADS as usize],
     hid: [Option<Slot>; MAX_GAMEPADS as usize],
+    key: [Option<Slot>; MAX_SECURITY_KEYS as usize],
 }
 
 /// A task serving a slot: dropping `cancel` cancels it, and `done` closes
@@ -292,8 +340,9 @@ async fn claim_slot(kind: create_device::Kind, index: u32) -> (Claim, oneshot::R
     let (done_tx, done_rx) = oneshot::channel();
     let previous = {
         let mut slots = slots().lock().unwrap();
-        let table = match kind {
+        let table: &mut [Option<Slot>] = match kind {
             create_device::Kind::Hid => &mut slots.hid,
+            create_device::Kind::SecurityKey => &mut slots.key,
             _ => &mut slots.gamepad,
         };
         table[index as usize].replace(Slot { cancel: cancel_tx, done: done_rx })
@@ -308,8 +357,9 @@ async fn claim_slot(kind: create_device::Kind, index: u32) -> (Claim, oneshot::R
 }
 
 /// Serves one CreateDevice on `stream`, which it owns from here on: the
-/// reply is DeviceCreated plus the fd, or a ControlError; for KIND_HID a
-/// DeviceVerified or ControlError follows once the driver has bound. Run
+/// reply is DeviceCreated plus the fd, or a ControlError; for KIND_HID and
+/// KIND_SECURITY_KEY a DeviceVerified or ControlError follows once the
+/// driver has bound. Run
 /// as its own task: it lives as long as the device does, since the relay
 /// runs inside it (so cancelling the task is destroying the device).
 pub async fn handle_create(mut stream: UnixStream, uid: u32, username: String, req: CreateDevice) {
@@ -318,7 +368,12 @@ pub async fn handle_create(mut stream: UnixStream, uid: u32, username: String, r
         create_device::Kind::Gamepad | create_device::Kind::Hid if req.index >= MAX_GAMEPADS => {
             Err(anyhow::anyhow!("gamepad index {} out of range (max {})", req.index, MAX_GAMEPADS - 1))
         }
-        create_device::Kind::Gamepad | create_device::Kind::Hid => Ok(()),
+        create_device::Kind::SecurityKey if req.index >= MAX_SECURITY_KEYS => Err(anyhow::anyhow!(
+            "security key index {} out of range (max {})",
+            req.index,
+            MAX_SECURITY_KEYS - 1
+        )),
+        create_device::Kind::Gamepad | create_device::Kind::Hid | create_device::Kind::SecurityKey => Ok(()),
         other => Err(anyhow::anyhow!("unsupported device kind {other:?}")),
     };
     let result = match checked {
@@ -327,6 +382,7 @@ pub async fn handle_create(mut stream: UnixStream, uid: u32, username: String, r
             let serve = async {
                 match kind {
                     create_device::Kind::Hid => serve_hid(&mut stream, uid, &username, req).await,
+                    create_device::Kind::SecurityKey => serve_security_key(&mut stream, uid, &username, req).await,
                     _ => serve_gamepad(&mut stream, uid, &username, req).await,
                 }
             };
@@ -395,7 +451,38 @@ async fn serve_hid(stream: &mut UnixStream, uid: u32, username: &str, req: Creat
     let (bind_tx, bind_rx) = oneshot::channel();
     pending_binds().lock().unwrap().insert(phys.clone(), bind_tx);
     let _pending = PendingBind(phys.clone());
-    create_and_verify(stream, uid, username, &req, &ident, &phys, bind_rx).await
+    create_and_verify(stream, uid, username, &req, &ident, &phys, bind_rx, UhidKind::Controller).await
+}
+
+async fn serve_security_key(stream: &mut UnixStream, uid: u32, username: &str, req: CreateDevice) -> Result<()> {
+    if !uhid_available() {
+        bail!("security keys are not available on this host (uhid, the udev rule or the udev monitor is missing)");
+    }
+    let ident = security_key_identity(&req.name, req.hid.as_ref().context("KIND_SECURITY_KEY without a HidIdentity")?)?;
+    let seq = HID_SEQ.fetch_add(1, Ordering::Relaxed);
+    let phys = format!("{PHYS_PREFIX}/uid-{uid}/key{}/{seq}", req.index);
+
+    let (bind_tx, bind_rx) = oneshot::channel();
+    pending_binds().lock().unwrap().insert(phys.clone(), bind_tx);
+    let _pending = PendingBind(phys.clone());
+    create_and_verify(stream, uid, username, &req, &ident, &phys, bind_rx, UhidKind::SecurityKey).await
+}
+
+/// Which uhid device a relay and its verdict are for: what wraith may
+/// write, what goes back to it, and what the driver must have made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UhidKind {
+    Controller,
+    SecurityKey,
+}
+
+impl UhidKind {
+    fn label(self) -> &'static str {
+        match self {
+            UhidKind::Controller => "raw controller",
+            UhidKind::SecurityKey => "security key",
+        }
+    }
 }
 
 /// Creates the uhid device, hands wraith its socket and runs the relay
@@ -410,6 +497,7 @@ async fn create_and_verify(
     ident: &HidIdentity,
     phys: &str,
     bind_rx: oneshot::Receiver<(String, String)>,
+    kind: UhidKind,
 ) -> Result<()> {
     let fd = {
         let (name, phys, ident) = (req.name.clone(), phys.to_string(), ident.clone());
@@ -419,20 +507,25 @@ async fn create_and_verify(
             .context("creating the uhid device")?
     };
     let keep = fd.try_clone().context("duplicating the uhid fd")?;
+    let what = kind.label();
     info!(uid, username, index = req.index, name = %req.name, phys,
         id = format!("{:04x}:{:04x}:{:04x}", ident.bus, ident.vendor_id, ident.product_id),
-        "devices: raw controller created, waiting for its driver");
-    let (ours, theirs) = pair().context("socketpair for the raw controller")?;
+        "devices: {what} created, waiting for its driver");
+    let (ours, theirs) = pair().with_context(|| format!("socketpair for the {what}"))?;
     send_created(stream, phys, &theirs).await;
     drop(theirs);
     let verified = Arc::new(AtomicBool::new(false));
-    let relay = relay_hid(ours, fd, verified.clone(), uid, req.index);
+    let relay = relay_hid(ours, fd, verified.clone(), uid, req.index, kind);
 
     let verdict = async {
         let verdict = match tokio::time::timeout(BIND_WAIT, bind_rx).await {
             Ok(Ok((devpath, driver))) => {
                 let d = driver.clone();
-                match tokio::task::spawn_blocking(move || verify_hid(&devpath, &d)).await {
+                let verify = move || match kind {
+                    UhidKind::Controller => verify_hid(&devpath, &d),
+                    UhidKind::SecurityKey => verify_security_key(&devpath, &d),
+                };
+                match tokio::task::spawn_blocking(verify).await {
                     Ok(r) => r.map(|()| driver),
                     Err(e) => Err(anyhow::anyhow!("verify task panicked: {e}")),
                 }
@@ -442,7 +535,7 @@ async fn create_and_verify(
         };
         match verdict {
             Ok(driver) => {
-                info!(uid, username, index = req.index, phys, driver, "devices: raw controller verified");
+                info!(uid, username, index = req.index, phys, driver, "devices: {what} verified");
                 verified.store(true, Ordering::Release);
                 let reply = ControlEnvelope { msg: Some(ControlMsg::DeviceVerified(DeviceVerified { driver })) };
                 if let Err(e) = write_frame(stream, &reply).await {
@@ -456,7 +549,7 @@ async fn create_and_verify(
                 if let Err(e) = write_uhid(&keep, &uhid_event(UHID_DESTROY)) {
                     warn!(uid, username, phys, error = %e, "devices: UHID_DESTROY failed");
                 }
-                Err(e.context("raw controller refused"))
+                Err(e.context(format!("{what} refused")))
             }
         }
     };
@@ -483,6 +576,26 @@ fn check_identity(name: &str, ident: &HidIdentity) -> Result<()> {
         bail!("unusable uniq");
     }
     screen_descriptor(&ident.report_descriptor)
+}
+
+/// The identity a security key is created with: the client's vendor,
+/// product, release and name, on USB, with FIDO_DESCRIPTOR. wraith sends
+/// nothing else; anything more is refused rather than ignored, so that a
+/// wraith that thinks it is sending a descriptor finds out.
+fn security_key_identity(name: &str, sent: &HidIdentity) -> Result<HidIdentity> {
+    if sent.bus != 0 || !sent.uniq.is_empty() || !sent.report_descriptor.is_empty() {
+        bail!("a security key's identity carries only vendor, product and version");
+    }
+    let ident = HidIdentity {
+        bus: BUS_USB,
+        vendor_id: sent.vendor_id,
+        product_id: sent.product_id,
+        version: sent.version,
+        uniq: String::new(),
+        report_descriptor: FIDO_DESCRIPTOR.to_vec(),
+    };
+    check_identity(name, &ident)?;
+    Ok(ident)
 }
 
 // HID usage pages and usages the screen refuses (HID Usage Tables 1.4).
@@ -686,8 +799,10 @@ fn valid_gamepad_batch(batch: &[u8]) -> bool {
 /// wraith <-> uhid, both ways: wraith's input reports and report replies
 /// to the device, once each is checked, with UHID_INPUT2 held back until
 /// `verified`; the driver's events (OUTPUT, GET_REPORT, SET_REPORT,
-/// OPEN/CLOSE/START/STOP) to wraith, one packet each.
-async fn relay_hid(wraith: OwnedFd, device: OwnedFd, verified: Arc<AtomicBool>, uid: u32, index: u32) {
+/// OPEN/CLOSE/START/STOP) to wraith, one packet each. For a security key
+/// wraith may send only 64-byte input reports, and the relay fails the
+/// driver's GET_REPORT and SET_REPORT itself instead of passing them on.
+async fn relay_hid(wraith: OwnedFd, device: OwnedFd, verified: Arc<AtomicBool>, uid: u32, index: u32, kind: UhidKind) {
     let (wraith, device) = match (AsyncFd::new(wraith), AsyncFd::new(device)) {
         (Ok(w), Ok(d)) => (w, d),
         _ => {
@@ -704,7 +819,12 @@ async fn relay_hid(wraith: OwnedFd, device: OwnedFd, verified: Arc<AtomicBool>, 
                 let Ok(mut guard) = guard else { break };
                 match guard.try_io(|fd| recv_packet(fd, &mut from_wraith)) {
                     Ok(Ok(Packet::Data(n))) => {
-                        if !valid_uhid_from_wraith(&from_wraith[..n], verified.load(Ordering::Acquire)) {
+                        let verified = verified.load(Ordering::Acquire);
+                        let valid = match kind {
+                            UhidKind::Controller => valid_uhid_from_wraith(&from_wraith[..n], verified),
+                            UhidKind::SecurityKey => valid_key_uhid_from_wraith(&from_wraith[..n], verified),
+                        };
+                        if !valid {
                             if !complained {
                                 warn!(uid, index, len = n, "devices: dropping a uhid event wraith may not send");
                                 complained = true;
@@ -731,6 +851,18 @@ async fn relay_hid(wraith: OwnedFd, device: OwnedFd, verified: Arc<AtomicBool>, 
                 match read {
                     Ok(Ok(0)) => break,
                     Ok(Ok(n)) => {
+                        if kind == UhidKind::SecurityKey {
+                            match key_driver_event(&from_device[..n]) {
+                                KeyDriverEvent::Relay => {}
+                                KeyDriverEvent::Drop => continue,
+                                KeyDriverEvent::Answer(reply) => {
+                                    if let Err(e) = nix::unistd::write(&device, &reply) {
+                                        debug!(uid, index, error = %e, "devices: answering a security key's report request failed");
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                         // A full socket costs the event; wraith reads
                         // promptly and the kernel resends what matters.
                         if let Err(e) = send(wraith.as_raw_fd(), &from_device[..n], MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL) {
@@ -782,6 +914,52 @@ fn valid_uhid_from_wraith(ev: &[u8], verified: bool) -> bool {
         // uhid_set_report_reply_req: u32 id, u16 err.
         UHID_SET_REPORT_REPLY => ev.len() >= 10,
         _ => false,
+    }
+}
+
+/// Whether `ev` is a uhid event wraith may write for a security key: only
+/// UHID_INPUT2 with one CTAPHID packet, once the driver's verdict is in.
+/// wraith never answers a key's report requests; the relay does.
+fn valid_key_uhid_from_wraith(ev: &[u8], verified: bool) -> bool {
+    if !verified || ev.len() < 6 || ev.len() > UHID_EVENT_SIZE {
+        return false;
+    }
+    let ty = u32::from_ne_bytes(ev[..4].try_into().expect("4 bytes"));
+    let size = u16::from_ne_bytes(ev[4..6].try_into().expect("2 bytes")) as usize;
+    ty == UHID_INPUT2 && size == FIDO_PACKET && 6 + size <= ev.len()
+}
+
+/// What the relay does with an event a security key's driver produced.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyDriverEvent {
+    /// Pass it to wraith: an output report, or the lifecycle events
+    /// (START, STOP, OPEN, CLOSE) that carry no data.
+    Relay,
+    /// Fail it here: the reply for a GET_REPORT or SET_REPORT.
+    Answer(Vec<u8>),
+    Drop,
+}
+
+fn key_driver_event(ev: &[u8]) -> KeyDriverEvent {
+    if ev.len() < 4 {
+        return KeyDriverEvent::Drop;
+    }
+    let ty = u32::from_ne_bytes(ev[..4].try_into().expect("4 bytes"));
+    match ty {
+        UHID_OUTPUT | UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE => KeyDriverEvent::Relay,
+        // uhid_get_report_req / uhid_set_report_req both start with the
+        // u32 id the reply (u32 id, u16 err, ...) must carry back.
+        UHID_GET_REPORT | UHID_SET_REPORT if ev.len() >= 8 => {
+            let reply_type = if ty == UHID_GET_REPORT { UHID_GET_REPORT_REPLY } else { UHID_SET_REPORT_REPLY };
+            let mut reply = reply_type.to_ne_bytes().to_vec();
+            reply.extend_from_slice(&ev[4..8]);
+            reply.extend_from_slice(&(libc::EIO as u16).to_ne_bytes());
+            if ty == UHID_GET_REPORT {
+                reply.extend_from_slice(&0u16.to_ne_bytes()); // size
+            }
+            KeyDriverEvent::Answer(reply)
+        }
+        _ => KeyDriverEvent::Drop,
     }
 }
 
@@ -915,6 +1093,21 @@ fn verify_hid(devpath: &str, driver: &str) -> Result<()> {
         if let Some(bit) = first_bit_outside(&keys, |b| HID_KEYS_ALLOWED.iter().any(|r| r.contains(&b))) {
             bail!("{} reports key {bit:#x}", input.display());
         }
+    }
+    Ok(())
+}
+
+/// What the driver made of a security key: hid-generic, and no input
+/// device anywhere under it -- FIDO_DESCRIPTOR has nothing to map, so one
+/// would mean something other than the descriptor decided what it is.
+fn verify_security_key(devpath: &str, driver: &str) -> Result<()> {
+    if driver != SECURITY_KEY_DRIVER {
+        bail!("driver {driver:?} bound to a security key (only {SECURITY_KEY_DRIVER} may)");
+    }
+    let mut inputs = Vec::new();
+    find_input_devices(&Path::new("/sys").join(devpath.trim_start_matches('/')), &mut inputs);
+    if let Some(input) = inputs.first() {
+        bail!("the security key's driver made an input device, {}", input.display());
     }
     Ok(())
 }
@@ -1331,7 +1524,7 @@ mod tests {
         let (wraith_relay, wraith) = async_pair();
         let (device_relay, device) = async_pair();
         let verified = Arc::new(AtomicBool::new(false));
-        let relay = tokio::spawn(relay_hid(wraith_relay, device_relay, verified.clone(), 1000, 0));
+        let relay = tokio::spawn(relay_hid(wraith_relay, device_relay, verified.clone(), 1000, 0, UhidKind::Controller));
 
         let mut input2 = UHID_INPUT2.to_ne_bytes().to_vec();
         input2.extend(8u16.to_ne_bytes());
@@ -1360,6 +1553,116 @@ mod tests {
         relay.await.unwrap();
     }
 
+    fn key_input2(size: u16, carried: usize) -> Vec<u8> {
+        let mut ev = UHID_INPUT2.to_ne_bytes().to_vec();
+        ev.extend(size.to_ne_bytes());
+        ev.extend(vec![0xaau8; carried]);
+        ev
+    }
+
+    #[tokio::test]
+    async fn key_relay_passes_packets_and_fails_report_requests_itself() {
+        let (wraith_relay, wraith) = async_pair();
+        let (device_relay, device) = async_pair();
+        // Verified from the start: holding input back before the verdict is
+        // key_events_from_wraith_are_whole_packets_only's.
+        let verified = Arc::new(AtomicBool::new(true));
+        let relay = tokio::spawn(relay_hid(wraith_relay, device_relay, verified, 1000, 0, UhidKind::SecurityKey));
+
+        // Only a whole packet goes through: not a reply to a report request,
+        // not a short report.
+        let packet = key_input2(64, 64);
+        let mut get_reply = UHID_GET_REPORT_REPLY.to_ne_bytes().to_vec();
+        get_reply.extend([0u8; 8]);
+        send_packet(&wraith, &get_reply);
+        send_packet(&wraith, &key_input2(8, 8));
+        send_packet(&wraith, &packet);
+        assert_eq!(recv_within(&device).await, Some(packet));
+
+        // The driver's GET_REPORT is failed by the relay, toward the device,
+        // and never reaches wraith; its output report does.
+        let mut get_report = UHID_GET_REPORT.to_ne_bytes().to_vec();
+        get_report.extend(7u32.to_ne_bytes());
+        get_report.extend([0u8, 0]); // rnum, rtype
+        send_packet(&device, &get_report);
+        let mut failed = UHID_GET_REPORT_REPLY.to_ne_bytes().to_vec();
+        failed.extend(7u32.to_ne_bytes());
+        failed.extend((libc::EIO as u16).to_ne_bytes());
+        failed.extend(0u16.to_ne_bytes());
+        assert_eq!(recv_within(&device).await, Some(failed));
+        let output = uhid_event(UHID_OUTPUT);
+        send_packet(&device, &output);
+        assert_eq!(recv_within(&wraith).await, Some(output));
+
+        drop(wraith);
+        assert_eq!(recv_within(&device).await, None);
+        relay.await.unwrap();
+    }
+
+    #[test]
+    fn key_events_from_wraith_are_whole_packets_only() {
+        assert!(valid_key_uhid_from_wraith(&key_input2(64, 64), true));
+        assert!(!valid_key_uhid_from_wraith(&key_input2(64, 64), false));
+        assert!(!valid_key_uhid_from_wraith(&key_input2(65, 65), true));
+        assert!(!valid_key_uhid_from_wraith(&key_input2(64, 10), true));
+        let mut set_reply = UHID_SET_REPORT_REPLY.to_ne_bytes().to_vec();
+        set_reply.extend([0u8; 6]);
+        assert!(!valid_key_uhid_from_wraith(&set_reply, true));
+        assert!(!valid_key_uhid_from_wraith(&uhid_event(UHID_CREATE2), true));
+    }
+
+    #[test]
+    fn key_driver_events_are_relayed_answered_or_dropped() {
+        assert_eq!(key_driver_event(&uhid_event(UHID_OUTPUT)), KeyDriverEvent::Relay);
+        assert_eq!(key_driver_event(&uhid_event(UHID_OPEN)), KeyDriverEvent::Relay);
+        let mut set_report = UHID_SET_REPORT.to_ne_bytes().to_vec();
+        set_report.extend(9u32.to_ne_bytes());
+        set_report.extend([0u8; 4]);
+        let mut failed = UHID_SET_REPORT_REPLY.to_ne_bytes().to_vec();
+        failed.extend(9u32.to_ne_bytes());
+        failed.extend((libc::EIO as u16).to_ne_bytes());
+        assert_eq!(key_driver_event(&set_report), KeyDriverEvent::Answer(failed));
+        assert_eq!(key_driver_event(&uhid_event(UHID_DESTROY)), KeyDriverEvent::Drop);
+        assert_eq!(key_driver_event(&[0u8; 2]), KeyDriverEvent::Drop);
+    }
+
+    #[test]
+    fn a_key_gets_ghostseats_descriptor_and_only_the_clients_ids() {
+        let sent = HidIdentity { vendor_id: 0x1050, product_id: 0x0407, version: 0x0543, ..Default::default() };
+        let ident = security_key_identity("YubiKey OTP+FIDO+CCID", &sent).unwrap();
+        assert_eq!(ident.bus, BUS_USB);
+        assert_eq!(ident.report_descriptor, FIDO_DESCRIPTOR);
+        assert_eq!((ident.vendor_id, ident.product_id, ident.version), (0x1050, 0x0407, 0x0543));
+        // The fixed descriptor passes the screen check_identity runs too.
+        screen_descriptor(&FIDO_DESCRIPTOR).unwrap();
+        // A descriptor, a serial or a bus from wraith is refused.
+        for bad in [
+            HidIdentity { report_descriptor: vec![0x05, 0x01], ..sent.clone() },
+            HidIdentity { uniq: "123456".into(), ..sent.clone() },
+            HidIdentity { bus: BUS_BLUETOOTH, ..sent.clone() },
+            HidIdentity { vendor_id: 0x1_0000, ..sent.clone() },
+        ] {
+            assert!(security_key_identity("YubiKey", &bad).is_err());
+        }
+    }
+
+    #[test]
+    fn the_fido_descriptor_is_the_specs() {
+        // gdp-spec.md §8.7, byte for byte.
+        let spec: &[u8] = &[
+            0x06, 0xd0, 0xf1, 0x09, 0x01, 0xa1, 0x01, 0x09, 0x20, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x40,
+            0x81, 0x02, 0x09, 0x21, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x40, 0x91, 0x02, 0xc0,
+        ];
+        assert_eq!(&FIDO_DESCRIPTOR[..], spec);
+    }
+
+    #[test]
+    fn a_security_key_must_be_hid_generic_with_no_input_device() {
+        // No such devpath: no input devices are found under it.
+        verify_security_key("/devices/virtual/misc/uhid/0003:1050:0407.ffff", "hid-generic").unwrap();
+        assert!(verify_security_key("/devices/virtual/misc/uhid/0003:1050:0407.ffff", "steam").is_err());
+    }
+
     #[tokio::test]
     async fn a_second_claim_on_a_slot_cancels_and_outlives_the_first() {
         let (first, mut first_cancelled) = claim_slot(create_device::Kind::Gamepad, 3).await;
@@ -1378,6 +1681,8 @@ mod tests {
         // Other slots and the other kind are untouched.
         let (_other, mut other_cancelled) = claim_slot(create_device::Kind::Hid, 3).await;
         assert!(other_cancelled.try_recv().is_err());
+        let (_key, mut key_cancelled) = claim_slot(create_device::Kind::SecurityKey, 1).await;
+        assert!(key_cancelled.try_recv().is_err());
     }
 
     // The descriptor screen.
