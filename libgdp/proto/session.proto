@@ -510,17 +510,23 @@ message InputEnvelope {
     HidInput hid_input = 11;
     HidGetReportReply hid_get_report_reply = 12;
     HidSetReportReply hid_set_report_reply = 13;
+    SecurityKeyConnect security_key_connect = 14;
+    SecurityKeyDisconnect security_key_disconnect = 15;
+    SecurityKeyInput security_key_input = 16;
   }
 }
 
-// wraith -> spectre on the input stream, only under the "hid" capability
-// (gdp-spec.md §8.4, §8.6). Nothing else is sent toward the client there.
+// wraith -> spectre on the input stream, only under the "hid" and
+// "security-key" capabilities (gdp-spec.md §8.4, §8.6, §8.7). Nothing
+// else is sent toward the client there.
 message HostInputEnvelope {
   oneof event {
     HidRejected hid_rejected = 1;
     HidOutput hid_output = 2;
     HidGetReport hid_get_report = 3;
     HidSetReport hid_set_report = 4;
+    SecurityKeyRejected security_key_rejected = 5;
+    SecurityKeyOutput security_key_output = 6;
   }
 }
 
@@ -661,6 +667,46 @@ message HidSetReportReply {
   uint32 pad_index = 1;
   uint32 request_id = 2;
   bool failed = 3;
+}
+
+// Security keys (gdp-spec.md §8.7), only on a session that negotiated
+// "security-key". Two slots of their own, apart from the gamepad slots;
+// the host presents every key with the same FIDO descriptor, so none is
+// sent, and the two ends relay CTAPHID packets without reading them.
+
+// spectre -> wraith: a key the user chose to forward appeared in the slot.
+message SecurityKeyConnect {
+  uint32 key_index = 1;  // 0 or 1
+  string name = 2;       // the product name, as the platform reports it; at most 128 bytes
+  uint32 vendor_id = 3;
+  uint32 product_id = 4;
+  uint32 version = 5;    // bcdDevice / release number
+}
+
+// spectre -> wraith: the slot's key went away or is no longer forwarded.
+message SecurityKeyDisconnect {
+  uint32 key_index = 1;
+}
+
+// wraith -> spectre: the slot's key was refused or failed (no uhid,
+// ghostseat's policy) and the slot is empty.
+message SecurityKeyRejected {
+  uint32 key_index = 1;
+  string reason = 2;  // for logs
+}
+
+// spectre -> wraith: one CTAPHID packet from the key, exactly 64 bytes,
+// no report ID.
+message SecurityKeyInput {
+  uint32 key_index = 1;
+  bytes data = 2;
+}
+
+// wraith -> spectre: one CTAPHID packet for the key, exactly 64 bytes,
+// no report ID.
+message SecurityKeyOutput {
+  uint32 key_index = 1;
+  bytes data = 2;
 }
 
 message TouchEvent {

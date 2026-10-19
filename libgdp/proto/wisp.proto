@@ -131,4 +131,8 @@ message ClientProfile {
   // kept while the display sleeps), "builtin" (the speaker or audio jack)
   // or "auto" (WirePlumber's own choice).
   string audio_output = 12;
+
+  // spectre's again: forward the client's FIDO security keys to the host
+  // (spectre -U, gdp-spec.md §8.7).
+  bool forward_security_keys = 13;
 }

@@ -11,6 +11,7 @@
 #include "gdp/framing.hpp"
 #include "gdp/negotiation.hpp"
 #include "gdp/refine.hpp"
+#include "gdp/security_key.hpp"
 #include "gdp/version.hpp"
 #include "session.pb.h"
 #include "log.hpp"
@@ -162,6 +163,9 @@ std::vector<std::string> SessionClient::offered_capabilities() const {
 		if (offer_hid_) {
 			offered.push_back(gdp::kCapabilityHid);
 		}
+	}
+	if (offer_security_key_) {
+		offered.push_back(gdp::kCapabilitySecurityKey);
 	}
 	if (offer_refine_) {
 		offered.push_back(gdp::kCapabilityRefine);
@@ -451,6 +455,8 @@ bool SessionClient::handle_accept(const gdp::session::ControlEnvelope &env) {
 	gamepad_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityGamepad);
 	hid_enabled_.store(gamepad_enabled_ && gdp::has_capability(session.capabilities, gdp::kCapabilityHid),
 		std::memory_order_release);
+	security_key_enabled_.store(gdp::has_capability(session.capabilities, gdp::kCapabilitySecurityKey),
+		std::memory_order_release);
 	file_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityFile);
 	// Each only with what it builds on (gdp-spec.md §7.12), whatever the host said.
 	file_clipboard_enabled_ = file_enabled_ && clipboard_enabled_ &&
@@ -690,10 +696,26 @@ void SessionClient::send_pointer_axis(double horizontal, double vertical) {
 }
 
 void SessionClient::handle_input_data(const uint8_t *data, size_t len) {
-	// gdp-spec.md §8.4: the host sends here only under "hid"; anything
-	// else is ignored rather than fatal.
+	// gdp-spec.md §8.4: the host sends here only under "hid" and
+	// "security-key"; anything else is ignored rather than fatal.
 	gdp::session::HostInputEnvelope env;
 	bool ok = input_reader_.feed_and_drain(data, len, &env, [&] {
+		if (security_keys_enabled()) {
+			if (env.has_security_key_rejected()) {
+				if (on_security_key_rejected) {
+					on_security_key_rejected(env.security_key_rejected().key_index(),
+						env.security_key_rejected().reason());
+				}
+				return true;
+			}
+			if (env.has_security_key_output()) {
+				if (on_security_key_output) {
+					on_security_key_output(env.security_key_output().key_index(),
+						env.security_key_output().data());
+				}
+				return true;
+			}
+		}
 		if (!hid_enabled()) {
 			return true;
 		}
@@ -768,6 +790,41 @@ void SessionClient::send_hid_set_report_reply(uint32_t pad_index, uint32_t reque
 	reply->set_pad_index(pad_index);
 	reply->set_request_id(request_id);
 	reply->set_failed(failed);
+	send_input(env);
+}
+
+void SessionClient::send_security_key_connect(uint32_t key_index, const std::string &name, uint32_t vendor_id,
+	uint32_t product_id, uint32_t version) {
+	if (!security_keys_enabled()) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *connect = env.mutable_security_key_connect();
+	connect->set_key_index(key_index);
+	connect->set_name(name.substr(0, gdp::kMaxSecurityKeyName));
+	connect->set_vendor_id(vendor_id);
+	connect->set_product_id(product_id);
+	connect->set_version(version);
+	send_input(env);
+}
+
+void SessionClient::send_security_key_disconnect(uint32_t key_index) {
+	if (!security_keys_enabled()) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	env.mutable_security_key_disconnect()->set_key_index(key_index);
+	send_input(env);
+}
+
+void SessionClient::send_security_key_input(uint32_t key_index, const uint8_t *packet, size_t len) {
+	if (!security_keys_enabled() || len != gdp::kSecurityKeyPacket) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *in = env.mutable_security_key_input();
+	in->set_key_index(key_index);
+	in->set_data(packet, len);
 	send_input(env);
 }
 

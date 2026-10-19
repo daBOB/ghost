@@ -62,6 +62,10 @@ pub struct Profile {
     /// "auto", "lan", "internet" or "mobile".
     pub network_profile: String,
     pub forward_gamepads: bool,
+    /// Forward the client's FIDO security keys to the host (spectre -U).
+    /// Off by default: a forwarded key signs whatever the session asks,
+    /// once the user touches it.
+    pub forward_security_keys: bool,
     /// Send the client's microphone to the host (spectre -M).
     pub microphone: bool,
     /// Run spectre with SPECTRE_LOG=debug.
@@ -89,6 +93,7 @@ impl Default for Profile {
             allow_pyrowave: true,
             network_profile: "auto".into(),
             forward_gamepads: true,
+            forward_security_keys: false,
             microphone: false,
             debug_logging: false,
             display_sleep_minutes: 20,
@@ -152,6 +157,7 @@ impl Profile {
             allow_pyrowave: self.allow_pyrowave,
             network_profile: self.network_profile.clone(),
             forward_gamepads: self.forward_gamepads,
+            forward_security_keys: self.forward_security_keys,
             microphone: self.microphone,
             debug_logging: self.debug_logging,
             display_sleep_minutes: self.display_sleep_minutes,

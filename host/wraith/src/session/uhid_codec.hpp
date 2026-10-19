@@ -66,4 +66,12 @@ std::vector<uint8_t> get_report_reply(uint32_t id, uint16_t err, const uint8_t *
 // UHID_SET_REPORT_REPLY.
 std::vector<uint8_t> set_report_reply(uint32_t id, uint16_t err);
 
+// A security key's UHID_OUTPUT (gdp-spec.md §8.7) as the CTAPHID packet
+// it carries: hidraw passes the report ID along with the report, 0 for
+// the FIDO descriptor's unnumbered one, and a writer may send less than
+// the 64 bytes, which a USB key would see zero-padded. False for an
+// event that isn't an output report, a report ID other than 0, or more
+// than one packet.
+bool fido_packet(const Event &ev, uint8_t packet[64]);
+
 } // namespace wraith::uhid

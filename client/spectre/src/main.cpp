@@ -16,7 +16,7 @@
 static void usage(const char *argv0) {
 	printf(
 		"Usage: %s -h host -p port [-t token] -P sha256 [-X decoder] [-f | -K] [-T] [-r WIDTHxHEIGHT]\n"
-		"       [-A] [-V view] [-c scale] [-k chord] [-C codec] [-N profile] [-R on|off] [-D] [-G | -g] [-M] [-W]\n",
+		"       [-A] [-V view] [-c scale] [-k chord] [-C codec] [-N profile] [-R on|off] [-D] [-G | -g] [-U] [-M] [-W]\n",
 		argv0);
 	printf("  -t token  the session token; without -t, spectre takes it from $SPECTRE_TOKEN,\n");
 	printf("            as spectre-qt passes it. The command line is visible to other users\n");
@@ -79,6 +79,11 @@ static void usage(const char *argv0) {
 	printf("            a virtual Xbox pad. Off by default\n");
 	printf("  -g        forward gamepads, starting with every one as a virtual Xbox pad (the\n");
 	printf("            session menu switches to raw)\n");
+	printf("  -U        forward this machine's security keys (FIDO2/U2F, a YubiKey's FIDO side) to\n");
+	printf("            the host, if it supports that, so the session's browsers can sign in with\n");
+	printf("            them; keys plugged in during the session too. Anything in the session can\n");
+	printf("            then ask a key to sign in anywhere, which only your touch on the key\n");
+	printf("            approves. Off by default\n");
 	printf("  -M        send this machine's microphone to the host, as a virtual microphone in the\n");
 	printf("            session, if it supports that. Off by default\n");
 	printf("  -S folder share a folder with the host, read-only, for the session: it shows up in\n");
@@ -220,6 +225,8 @@ int main(int argc, char *argv[]) {
 		} else if (strcmp(arg, "-g") == 0) {
 			options.forward_gamepads = true;
 			options.raw_gamepads = false;
+		} else if (strcmp(arg, "-U") == 0) {
+			options.forward_security_keys = true;
 		} else if (strcmp(arg, "-M") == 0) {
 			options.microphone = true;
 		} else if (strcmp(arg, "-S") == 0) {

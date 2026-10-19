@@ -194,6 +194,16 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 			gamepads_[i].raw->set_report(request_id, report_id, type, data);
 		}
 	};
+	// Security keys (gdp-spec.md §8.7): the host's packets go to the key's
+	// writer thread.
+	client_.on_security_key_rejected = [this](uint32_t i, const std::string &reason) {
+		on_security_key_rejected(i, reason);
+	};
+	client_.on_security_key_output = [this](uint32_t i, const std::string &packet) {
+		if (i < gdp::kMaxSecurityKeys && keys_[i]) {
+			relay_security_key_packet(i, packet);
+		}
+	};
 	decoder_.on_frame = [this](AVFrame *frame) { on_decoded_frame(frame); };
 }
 
@@ -397,6 +407,7 @@ bool StreamSession::connect_and_wait_for_accept() {
 	// Offered whichever mode the session starts in: the menu can switch
 	// to raw later, but a capability can't be added after SessionAccept.
 	client_.set_raw_controllers(true);
+	client_.set_security_keys(options_.forward_security_keys);
 	client_.set_microphone(options_.microphone);
 	client_.set_file_share(!options_.shared_folders.empty() || options_.share_my_files);
 	if (!client_.connect(options_.host, options_.port, options_.token, options_.cert_sha256)) {
@@ -680,6 +691,17 @@ void StreamSession::main_loop() {
 			follow_window();
 		}
 		tick_pan(now_us);
+		if (client_.security_keys_enabled() && now_us >= next_key_check_us_) {
+			// Cheap: SDL keeps the count from its own hotplug watch.
+			constexpr uint64_t kKeyCheckUs = 500000;
+			next_key_check_us_ = now_us + kKeyCheckUs;
+			uint32_t count = SDL_hid_device_change_count();
+			if (!keys_scanned_ || count != hid_change_count_) {
+				keys_scanned_ = true;
+				hid_change_count_ = count;
+				rescan_security_keys();
+			}
+		}
 		uint64_t raw_report_us = raw_report_us_.load(std::memory_order_relaxed);
 		if (raw_report_us > gamepad_active_us_ && now_us - raw_report_us < kGamepadIdleHoldUs) {
 			note_gamepad_activity();
@@ -1362,6 +1384,121 @@ void StreamSession::on_hid_rejected(uint32_t i, const std::string &reason) {
 	uint32_t instance_id = gamepads_[i].id;
 	gamepads_[i] = GamepadSlot{};
 	open_standard_gamepad(i, instance_id);
+}
+
+void StreamSession::rescan_security_keys() {
+	constexpr uint64_t kToastUs = 4000000;
+	std::vector<SecurityKey::Identity> found = SecurityKey::find();
+	auto present = [&](const std::string &path) {
+		for (const SecurityKey::Identity &id : found) {
+			if (id.path == path) {
+				return true;
+			}
+		}
+		return false;
+	};
+	for (uint32_t i = 0; i < gdp::kMaxSecurityKeys; i++) {
+		if (keys_[i] && !present(keys_[i]->identity().path)) {
+			SLOG_INFO("spectre: security key \"%s\" (slot %u) unplugged", keys_[i]->identity().name.c_str(),
+				i);
+			keys_[i].reset(); // its threads stop here
+			client_.send_security_key_disconnect(i);
+		}
+	}
+	for (auto it = refused_keys_.begin(); it != refused_keys_.end();) {
+		it = present(*it) ? std::next(it) : refused_keys_.erase(it);
+	}
+	for (const SecurityKey::Identity &id : found) {
+		bool forwarded = false;
+		for (const auto &key : keys_) {
+			forwarded = forwarded || (key && key->identity().path == id.path);
+		}
+		if (forwarded || refused_keys_.count(id.path)) {
+			continue;
+		}
+		uint32_t i = 0;
+		while (i < gdp::kMaxSecurityKeys && keys_[i]) {
+			i++;
+		}
+		if (i == gdp::kMaxSecurityKeys) {
+			SLOG_INFO("spectre: security key \"%s\": both slots in use, not forwarded", id.name.c_str());
+			refused_keys_.insert(id.path);
+			continue;
+		}
+		std::string why;
+		std::unique_ptr<SecurityKey> key = SecurityKey::open(id, &why);
+		if (!key) {
+			SLOG_ERROR("spectre: security key \"%s\" can't be forwarded: %s", id.name.c_str(), why.c_str());
+			refused_keys_.insert(id.path);
+			continue;
+		}
+		client_.send_security_key_connect(i, id.name, id.vendor_id, id.product_id, id.version);
+		SLOG_INFO("spectre: security key \"%s\" (%04x:%04x) forwarded as slot %u", id.name.c_str(),
+			id.vendor_id, id.product_id, i);
+		// After the connect: its packets follow it on the input stream.
+		key->start([this, i](const uint8_t *packet, size_t len) {
+			client_.send_security_key_input(i, packet, len);
+		});
+		keys_[i] = std::move(key);
+		key_policy_[i] = gdp::KeyPolicy{};
+		toast_.show("Security key forwarded: " + id.name, gdp::monotonic_us(), kToastUs);
+		mark_ui_dirty();
+	}
+}
+
+void StreamSession::relay_security_key_packet(uint32_t i, const std::string &packet) {
+	// Long enough to find the key and touch it; the next request replaces it.
+	constexpr uint64_t kToastUs = 10000000;
+	gdp::KeyVerdict verdict;
+	key_policy_[i].feed(reinterpret_cast<const uint8_t *>(packet.data()), packet.size(), &verdict);
+	for (const gdp::KeyPacket &p : verdict.to_key) {
+		keys_[i]->output(std::string(reinterpret_cast<const char *>(p.data()), p.size()));
+	}
+	// The client's own answer rides the input stream like the key's would.
+	for (const gdp::KeyPacket &p : verdict.to_host) {
+		client_.send_security_key_input(i, p.data(), p.size());
+	}
+	const std::string &name = keys_[i]->identity().name;
+	if (verdict.refused) {
+		SLOG_ERROR("spectre: security key \"%s\": the host tried to %s; refused", name.c_str(),
+			verdict.refused_what.c_str());
+		toast_.show("The host tried to " + verdict.refused_what +
+				" -- refused. Manage security keys on this computer.",
+			gdp::monotonic_us(), kToastUs);
+		mark_ui_dirty();
+		return;
+	}
+	if (!verdict.notice) {
+		return;
+	}
+	std::string message;
+	switch (verdict.request.kind) {
+	case gdp::KeyRequest::kSignIn:
+		message = "Touch your security key to sign in to " + verdict.request.rp_id;
+		break;
+	case gdp::KeyRequest::kRegister:
+		message = "Touch your security key to register it with " + verdict.request.rp_id;
+		break;
+	case gdp::KeyRequest::kSelect: message = "Touch your security key to select it"; break;
+	case gdp::KeyRequest::kU2f:
+		message = "The host wants your security key (U2F): touch it to approve";
+		break;
+	}
+	SLOG_INFO("spectre: security key \"%s\": %s", name.c_str(), message.c_str());
+	toast_.show(message, gdp::monotonic_us(), kToastUs);
+	mark_ui_dirty();
+}
+
+void StreamSession::on_security_key_rejected(uint32_t i, const std::string &reason) {
+	if (i >= gdp::kMaxSecurityKeys || !keys_[i]) {
+		return;
+	}
+	std::string name = keys_[i]->identity().name;
+	SLOG_ERROR("spectre: the host refused security key \"%s\" (%s)", name.c_str(), reason.c_str());
+	refused_keys_.insert(keys_[i]->identity().path);
+	keys_[i].reset();
+	toast_.show("The host refused " + name, gdp::monotonic_us(), 5000000);
+	mark_ui_dirty();
 }
 
 void StreamSession::handle_gamepad_removed(uint32_t instance_id) {

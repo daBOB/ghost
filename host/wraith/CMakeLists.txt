@@ -176,6 +176,7 @@ add_executable(wraith
   src/session/gamepad_evdev.cpp
   src/session/gamepad_devices.cpp
   src/session/raw_controllers.cpp
+  src/session/security_keys.cpp
   src/session/uhid_codec.cpp
   src/session/seat_client.cpp
   src/session/session_cert.cpp

@@ -125,6 +125,8 @@ GdpSession::GdpSession(SessionHost &host, TokenValidator token_validator, const 
 	if (!control_socket.empty() && raw_controllers) {
 		raw_ = std::make_unique<RawControllers>(control_socket, host_.event_loop(),
 			[this](const gdp::session::HostInputEnvelope &env) { send_host_input(env); });
+		keys_ = std::make_unique<SecurityKeys>(control_socket, host_.event_loop(),
+			[this](const gdp::session::HostInputEnvelope &env) { send_host_input(env); });
 	}
 	// QUIC's own congestion controller, under wraith's rate control: CUBIC
 	// unless wraith.toml says network.congestion_control = "bbr"
@@ -202,6 +204,9 @@ void GdpSession::reset_session(uint64_t error_code) {
 	}
 	if (raw_) {
 		raw_->disconnect_all();
+	}
+	if (keys_) {
+		keys_->disconnect_all();
 	}
 	if (authenticated_) {
 		host_.session().set_viewer_attached(false);
@@ -867,6 +872,9 @@ std::vector<std::string> GdpSession::supported_capabilities() const {
 	if (raw_) {
 		supported.push_back(gdp::kCapabilityHid);
 	}
+	if (keys_) {
+		supported.push_back(gdp::kCapabilitySecurityKey);
+	}
 	// Opened with the host's other services, before any client attaches.
 	if (host_.session().microphone()) {
 		supported.push_back(gdp::kCapabilityMicrophone);
@@ -1094,6 +1102,10 @@ bool GdpSession::gamepads_negotiated() const {
 
 bool GdpSession::raw_negotiated() const {
 	return raw_ && gamepads_negotiated() && gdp::has_capability(capabilities_, gdp::kCapabilityHid);
+}
+
+bool GdpSession::security_keys_negotiated() const {
+	return keys_ && gdp::has_capability(capabilities_, gdp::kCapabilitySecurityKey);
 }
 
 void GdpSession::handle_gamepad_connect(const gdp::session::GamepadConnect &connect) {
@@ -1482,6 +1494,18 @@ void GdpSession::handle_input_data(Peer *peer, const uint8_t *data, size_t len) 
 		} else if (env.has_hid_set_report_reply()) {
 			if (raw_negotiated()) {
 				raw_->set_report_reply(env.hid_set_report_reply());
+			}
+		} else if (env.has_security_key_connect()) {
+			if (security_keys_negotiated()) {
+				keys_->connect(env.security_key_connect());
+			}
+		} else if (env.has_security_key_disconnect()) {
+			if (security_keys_negotiated()) {
+				keys_->disconnect(env.security_key_disconnect().key_index());
+			}
+		} else if (env.has_security_key_input()) {
+			if (security_keys_negotiated()) {
+				keys_->input(env.security_key_input());
 			}
 		}
 		// TouchEvent: ignored; wraith has no uinput touch device.

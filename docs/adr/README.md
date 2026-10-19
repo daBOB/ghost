@@ -34,3 +34,4 @@ Status: Accepted (YYYY-MM-DD) | Superseded by NNNN
 | [0012](0012-host-setup-stays-with-the-admin.md) | Group membership and vgem stay with the admin |
 | [0013](0013-no-host-sleep-inhibitor.md) | ghost doesn't inhibit host sleep |
 | [0014](0014-controllers-pass-through-as-raw-hid.md) | Controllers pass through as raw HID; the Xbox pad is the fallback |
+| [0015](0015-security-keys-pass-through-with-a-fixed-descriptor.md) | Security keys pass through as FIDO HID, with the host's own descriptor |

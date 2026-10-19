@@ -69,8 +69,8 @@ void RawControllers::connect(const gdp::session::HidConnect &c) {
 	std::string node, error;
 	int conn = -1;
 	slot.verdict_reader = gdp::FrameReader{};
-	int fd = SeatClient::create_hid_device(control_socket_, index, c.name(), identity, &node, &conn,
-		&slot.verdict_reader, &error);
+	int fd = SeatClient::create_hid_device(control_socket_, ghost::control::CreateDevice::KIND_HID, index,
+		c.name(), identity, &node, &conn, &slot.verdict_reader, &error);
 	if (fd < 0) {
 		WLOG_ERROR("hid: slot %u (\"%s\" %04x:%04x): ghostseat could not create a device: %s", index,
 			c.name().c_str(), c.vendor_id(), c.product_id(), error.c_str());

@@ -23,6 +23,7 @@
 #include "session/file_sender.hpp"
 #include "session/gamepad_devices.hpp"
 #include "session/raw_controllers.hpp"
+#include "session/security_keys.hpp"
 #include "session/path_rate_estimator.hpp"
 #include "session/rate_controller.hpp"
 #include "session/session_host.hpp"
@@ -74,7 +75,8 @@ public:
 	// offers the "gamepad" capability, and a client's gamepad messages
 	// are dropped. `raw_controllers` is the same for raw HID controllers
 	// (SessionInit.uhid_available): the "hid" capability, and "gamepad"
-	// with it even without uinput.
+	// with it even without uinput; and for security keys, which need only
+	// uhid too: the "security-key" capability.
 	GdpSession(SessionHost &host, TokenValidator token_validator, const std::string &control_socket = "",
 		bool gamepads = false, bool raw_controllers = false);
 	~GdpSession();
@@ -277,6 +279,9 @@ private:
 	// and "hid" in effect and uhid on this host.
 	bool raw_negotiated() const;
 	void handle_hid_connect(const gdp::session::HidConnect &connect);
+	// Security keys (gdp-spec.md §8.7): "security-key" in effect and uhid
+	// on this host.
+	bool security_keys_negotiated() const;
 	// Toward the client on the input stream; dropped without a viewer.
 	void send_host_input(const gdp::session::HostInputEnvelope &env);
 
@@ -378,6 +383,9 @@ private:
 	// its pads from the session's point of view.
 	std::unique_ptr<GamepadDevices> gamepads_;
 	std::unique_ptr<RawControllers> raw_;
+	// The client's forwarded security keys, on a host with uhid; per-client
+	// like the controllers.
+	std::unique_ptr<SecurityKeys> keys_;
 	// The -G socket, for ViewerAttached/ViewerDetached; empty under -l.
 	std::string control_socket_;
 	uint32_t next_frame_id_ = 0;

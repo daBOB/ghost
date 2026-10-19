@@ -113,6 +113,7 @@ prints this list with no arguments; the logic of each is in
 | `-D` | Outline each refined tile in red for a quarter second. No effect while lossless is off. |
 | `-G` | Forward local gamepads: raw where the controller and host allow, so the host's own driver for it binds (touchpad, motion, lights, rumble, Steam Input), otherwise as a virtual Xbox pad ([gamepads](../design/audio-cursor-gamepad.md#gamepads)). |
 | `-g` | Forward local gamepads, starting with every one as a virtual Xbox pad. The session menu's Controllers row switches between that and raw. |
+| `-U` | Forward this machine's FIDO security keys (a YubiKey's FIDO2/U2F side) to the host, including ones plugged in during the session, so the session's browsers can sign in with them ([gdp-spec.md §8.7](../spec/gdp-spec.md#87-security-keys), [ADR 0015](../adr/0015-security-keys-pass-through-with-a-fixed-descriptor.md)). Linux and macOS; on Windows a key can't be opened without elevation. |
 | `-M` | Send this machine's microphone to the host. |
 | `-S folder` | Share a folder with the host, read-only, for the session: it shows up in the host's file manager. Repeatable. |
 | `-F` | Share this machine's files with the host, as `-S` does: the home folder (the user folder on Windows), then every drive on Windows; the removable drives (`/run/media/$USER`, `/media/$USER`, `/Volumes` on macOS) elsewhere, including drives plugged in during the session. |
