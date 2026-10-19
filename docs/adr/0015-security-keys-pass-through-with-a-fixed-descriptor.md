@@ -63,7 +63,13 @@ CTAP2 requests that need a touch carry the relying party's ID in clear.
 - While a key is forwarded, any process of the session's user can ask it
   for an assertion for any site, and a touch grants it. The client's
   notice of the relying party, and the setting being off by default, are
-  the mitigation.
+  the mitigation. What it can't do is maintain the key: the client passes
+  only the commands a sign-in uses and answers the rest itself
+  (`authenticatorReset`, PIN setting, credential management, enrolment,
+  configuration, vendor commands) with `CTAP2_ERR_OPERATION_DENIED`, so
+  no touch, misplaced or coaxed, can wipe or lock the key. A browser's
+  security-key settings page in the session therefore fails on a
+  forwarded key; the key is managed on the client's own machine.
 - Only the FIDO interface goes through. A YubiKey's OTP keyboard and its
   CCID smartcard (PIV, OpenPGP) don't; smartcards would need PC/SC
   forwarding, a separate decision.

@@ -201,8 +201,7 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	};
 	client_.on_security_key_output = [this](uint32_t i, const std::string &packet) {
 		if (i < gdp::kMaxSecurityKeys && keys_[i]) {
-			note_security_key_request(i, packet);
-			keys_[i]->output(packet);
+			relay_security_key_packet(i, packet);
 		}
 	};
 	decoder_.on_frame = [this](AVFrame *frame) { on_decoded_frame(frame); };
@@ -1441,31 +1440,51 @@ void StreamSession::rescan_security_keys() {
 			client_.send_security_key_input(i, packet, len);
 		});
 		keys_[i] = std::move(key);
-		key_requests_[i] = gdp::KeyRequestWatcher{};
+		key_policy_[i] = gdp::KeyPolicy{};
 		toast_.show("Security key forwarded: " + id.name, gdp::monotonic_us(), kToastUs);
 		mark_ui_dirty();
 	}
 }
 
-void StreamSession::note_security_key_request(uint32_t i, const std::string &packet) {
+void StreamSession::relay_security_key_packet(uint32_t i, const std::string &packet) {
 	// Long enough to find the key and touch it; the next request replaces it.
 	constexpr uint64_t kToastUs = 10000000;
-	gdp::KeyRequest req;
-	if (!key_requests_[i].feed(reinterpret_cast<const uint8_t *>(packet.data()), packet.size(), &req)) {
+	gdp::KeyVerdict verdict;
+	key_policy_[i].feed(reinterpret_cast<const uint8_t *>(packet.data()), packet.size(), &verdict);
+	for (const gdp::KeyPacket &p : verdict.to_key) {
+		keys_[i]->output(std::string(reinterpret_cast<const char *>(p.data()), p.size()));
+	}
+	// The client's own answer rides the input stream like the key's would.
+	for (const gdp::KeyPacket &p : verdict.to_host) {
+		client_.send_security_key_input(i, p.data(), p.size());
+	}
+	const std::string &name = keys_[i]->identity().name;
+	if (verdict.refused) {
+		SLOG_ERROR("spectre: security key \"%s\": the host tried to %s; refused", name.c_str(),
+			verdict.refused_what.c_str());
+		toast_.show("The host tried to " + verdict.refused_what +
+				" -- refused. Manage security keys on this computer.",
+			gdp::monotonic_us(), kToastUs);
+		mark_ui_dirty();
+		return;
+	}
+	if (!verdict.notice) {
 		return;
 	}
 	std::string message;
-	switch (req.kind) {
-	case gdp::KeyRequest::kSignIn: message = "Touch your security key to sign in to " + req.rp_id; break;
+	switch (verdict.request.kind) {
+	case gdp::KeyRequest::kSignIn:
+		message = "Touch your security key to sign in to " + verdict.request.rp_id;
+		break;
 	case gdp::KeyRequest::kRegister:
-		message = "Touch your security key to register it with " + req.rp_id;
+		message = "Touch your security key to register it with " + verdict.request.rp_id;
 		break;
 	case gdp::KeyRequest::kSelect: message = "Touch your security key to select it"; break;
 	case gdp::KeyRequest::kU2f:
 		message = "The host wants your security key (U2F): touch it to approve";
 		break;
 	}
-	SLOG_INFO("spectre: security key \"%s\": %s", keys_[i]->identity().name.c_str(), message.c_str());
+	SLOG_INFO("spectre: security key \"%s\": %s", name.c_str(), message.c_str());
 	toast_.show(message, gdp::monotonic_us(), kToastUs);
 	mark_ui_dirty();
 }

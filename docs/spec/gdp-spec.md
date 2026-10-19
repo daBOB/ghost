@@ -2014,9 +2014,31 @@ A host MUST ignore one of any other length, and one for an empty slot.
 without a report ID. The client writes it to the key (on platforms
 whose HID API wants a report ID first, preceded by 0).
 
-Packets are relayed in order and never merged, split or answered by
-either end: CTAPHID's own channels, keep-alives and timeouts work across
-the relay as they do locally, a few round trips per sign-in.
+Packets are relayed in order and never merged or split: CTAPHID's own
+channels, keep-alives and timeouts work across the relay as they do
+locally, a few round trips per sign-in. The host never answers a packet
+itself; the client does only as the next paragraph says.
+
+A forwarded key is for signing in, not for maintenance: the session is
+remote, and what it may ask the key is bounded by the client, which
+holds each channel's message until it is complete and then passes it to
+the key whole or answers it in the key's place. A client MUST NOT pass
+to the key a CTAP2 command other than `authenticatorMakeCredential`,
+`authenticatorGetAssertion`, `authenticatorGetNextAssertion`,
+`authenticatorGetInfo`, `authenticatorSelection`,
+`authenticatorLargeBlobs`, and `authenticatorClientPIN` with a
+subcommand other than `setPIN` and `changePIN`; it answers any other,
+`authenticatorReset`, credential management, enrolment, configuration
+and vendor commands included, with a `CTAPHID_CBOR` response of the
+single status `CTAP2_ERR_OPERATION_DENIED` (0x27) on the request's
+channel, so the host's FIDO client fails at once rather than waiting out
+a timeout. Likewise it passes only the CTAPHID commands `INIT`, `PING`,
+`MSG`, `CBOR`, `CANCEL`, `WINK` and `LOCK`, and answers any other with
+`CTAPHID_ERROR` `ERR_INVALID_CMD`. A `MSG` (U2F) command carries no
+maintenance and passes. The client SHOULD tell its user what was
+refused. A FIDO client in the session that manages keys (a browser's
+security-key settings page) fails on a forwarded key by design; the key
+is managed on the client's own machine, with forwarding off.
 
 The client SHOULD show its user which site a request is for. The CTAP2
 requests that need the user's touch, `authenticatorMakeCredential` and
@@ -2782,8 +2804,11 @@ session's user the client's key for as long as it is forwarded: any of
 them can ask it to sign in to any site, and the user's touch is the only
 thing that grants a request. The origin a signature is bound to is
 whatever the host's browser says it is. A client therefore forwards a
-key only when its user chose to, and SHOULD show the relying party each
-request names, so that a touch answers a request the user can see. A
+key only when its user chose to, SHOULD show the relying party each
+request names, so that a touch answers a request the user can see, and
+MUST refuse the key's maintenance commands (§8.7): a session that could
+reset the key, or set its PIN, could destroy or lock away every
+credential on it with one misplaced touch, or none. A
 host MUST NOT let a forwarded key become anything but a FIDO HID
 device: it MUST present a descriptor of its own rather than the
 client's, and MUST check the devices its drivers create, as for raw
