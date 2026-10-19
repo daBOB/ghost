@@ -1663,6 +1663,180 @@ mod tests {
         assert!(verify_security_key("/devices/virtual/misc/uhid/0003:1050:0407.ffff", "steam").is_err());
     }
 
+    /// handle_create for a security key against the real kernel, with this
+    /// test as wraith and a real key at `GHOST_TEST_KEY` (its FIDO hidraw
+    /// node) behind the device: the driver's verdict, the node handed to
+    /// `GHOST_TEST_UID`, and a CTAPHID_INIT and CTAP2 GetInfo through the
+    /// virtual node answered by the key. Needs root, /dev/uhid and the
+    /// installed udev rule. Build as yourself and run the binary as root,
+    /// so no root-owned files land in target/:
+    ///   cargo test -p ghostseat --no-run
+    ///   sudo GHOST_TEST_KEY=/dev/hidrawN GHOST_TEST_UID=$(id -u) \
+    ///     target/debug/deps/ghostseat-... --ignored --nocapture real_security_key
+    /// GHOST_TEST_HOLD=<seconds> keeps the bridge up afterwards, to try the
+    /// virtual key from a browser.
+    #[tokio::test]
+    #[ignore = "needs root, /dev/uhid, the udev rule and a real key (GHOST_TEST_KEY)"]
+    async fn real_security_key_through_ghostseat() {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::MetadataExt;
+
+        let key_path = std::env::var("GHOST_TEST_KEY").expect("GHOST_TEST_KEY=/dev/hidrawN, the key's FIDO interface");
+        let uid: u32 = std::env::var("GHOST_TEST_UID").expect("GHOST_TEST_UID").parse().unwrap();
+        start_monitor(uid);
+        assert!(uhid_available(), "uhid, the udev rule or the monitor is missing");
+
+        // ghostseat's end of the control connection, and ours as wraith.
+        let (seat, mut wraith) = UnixStream::pair().unwrap();
+        let req = CreateDevice {
+            kind: create_device::Kind::SecurityKey as i32,
+            index: 0,
+            name: "Ghost test security key".into(),
+            hid: Some(HidIdentity { vendor_id: 0x1050, product_id: 0x0407, version: 0x0100, ..Default::default() }),
+        };
+        tokio::spawn(handle_create(seat, uid, "test".into(), req));
+
+        // DeviceCreated, with the relay socket as SCM_RIGHTS.
+        let (frame, relay) = wraith
+            .async_io(Interest::READABLE, || {
+                let mut buf = vec![0u8; 4096];
+                let mut iov = [IoSliceMut::new(&mut buf)];
+                let mut cmsg = nix::cmsg_space!([std::os::fd::RawFd; 1]);
+                let msg = recvmsg::<UnixAddr>(wraith.as_raw_fd(), &mut iov, Some(&mut cmsg), MsgFlags::MSG_DONTWAIT)
+                    .map_err(std::io::Error::from)?;
+                let fd = msg.cmsgs().unwrap().find_map(|c| match c {
+                    ControlMessageOwned::ScmRights(fds) => fds.first().copied(),
+                    _ => None,
+                });
+                let n = msg.bytes;
+                Ok((buf[..n].to_vec(), fd))
+            })
+            .await
+            .unwrap();
+        let created: ControlEnvelope = ipc::framing::read_frame_sync(&mut std::io::Cursor::new(frame), 4096).unwrap();
+        assert!(matches!(created.msg, Some(ControlMsg::DeviceCreated(_))), "{created:?}");
+        // Safety: the fd just arrived over SCM_RIGHTS and nothing else owns it.
+        let relay: OwnedFd = unsafe { std::os::fd::FromRawFd::from_raw_fd(relay.expect("no fd with DeviceCreated")) };
+
+        // Bridge the relay to the real key before the verdict, as wraith
+        // answers a driver's probe (a key's needs nothing, but the order is
+        // wraith's). Input reports are dropped until the verdict.
+        let relay = Arc::new(relay);
+        let key = Arc::new(std::fs::OpenOptions::new().read(true).write(true).open(&key_path).unwrap());
+        {
+            let (relay, key) = (relay.clone(), key.clone());
+            std::thread::spawn(move || loop {
+                let mut packet = [0u8; FIDO_PACKET];
+                let n = (&*key).read(&mut packet).unwrap();
+                let mut ev = UHID_INPUT2.to_ne_bytes().to_vec();
+                ev.extend((n as u16).to_ne_bytes());
+                ev.extend(&packet[..n]);
+                let _ = send(relay.as_raw_fd(), &ev, MsgFlags::MSG_NOSIGNAL);
+            });
+        }
+        {
+            let (relay, key) = (relay.clone(), key.clone());
+            std::thread::spawn(move || {
+                let mut ev = vec![0u8; UHID_EVENT_SIZE];
+                loop {
+                    let n = match recv(relay.as_raw_fd(), &mut ev, MsgFlags::MSG_DONTWAIT) {
+                        Ok(0) => return,
+                        Ok(n) => n,
+                        Err(nix::errno::Errno::EAGAIN) => {
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(e) => panic!("relay recv: {e}"),
+                    };
+                    let ty = u32::from_ne_bytes(ev[..4].try_into().unwrap());
+                    eprintln!("bridge: uhid event {ty} ({n} bytes)");
+                    if ty == UHID_OUTPUT {
+                        // uhid_output_req: data[4096], u16 size, u8 rtype.
+                        let size = u16::from_ne_bytes(ev[4 + 4096..4 + 4098].try_into().unwrap()) as usize;
+                        // The report ID (0, unnumbered) leads, as hidraw wants it.
+                        (&*key).write_all(&ev[4..4 + size]).unwrap();
+                    }
+                }
+            });
+        }
+
+        let verified: ControlEnvelope = ipc::framing::read_frame(&mut wraith).await.unwrap();
+        let Some(ControlMsg::DeviceVerified(v)) = verified.msg else { panic!("not verified: {verified:?}") };
+        assert_eq!(v.driver, "hid-generic");
+
+        // The virtual key's hidraw node, once udev and the monitor are done.
+        let mut node = None;
+        for _ in 0..300 {
+            node = std::fs::read_dir("/sys/class/hidraw").unwrap().flatten().find_map(|e| {
+                let uevent = std::fs::read_to_string(e.path().join("device/uevent")).ok()?;
+                uevent
+                    .contains(&format!("HID_PHYS={PHYS_PREFIX}/uid-{uid}/key0/"))
+                    .then(|| PathBuf::from("/dev").join(e.file_name()))
+            });
+            if node.as_ref().is_some_and(|n| std::fs::metadata(n).is_ok_and(|m| m.uid() == uid)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let node = node.expect("no hidraw node for the key");
+        let meta = std::fs::metadata(&node).unwrap();
+        eprintln!("virtual key: {} uid {} mode {:o}", node.display(), meta.uid(), meta.mode() & 0o777);
+        assert_eq!(meta.uid(), uid, "the node wasn't handed to the session's uid");
+        assert_eq!(meta.mode() & 0o777, 0o600);
+
+        // CTAPHID_INIT on the broadcast channel, then CTAP2 GetInfo on the
+        // channel it allocates, through the virtual node. Blocking reads,
+        // off the runtime's one thread, which the relay task needs.
+        tokio::task::spawn_blocking(move || {
+            let mut dev = std::fs::OpenOptions::new().read(true).write(true).open(&node).unwrap();
+            let write_packet = |dev: &mut std::fs::File, cid: [u8; 4], cmd: u8, payload: &[u8]| {
+                let mut report = vec![0u8; 1 + FIDO_PACKET]; // report ID 0 first
+                report[1..5].copy_from_slice(&cid);
+                report[5] = cmd;
+                report[6..8].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+                report[8..8 + payload.len()].copy_from_slice(payload);
+                dev.write_all(&report).unwrap();
+            };
+            let nonce = [1u8, 2, 3, 4, 5, 6, 7, 8];
+            write_packet(&mut dev, [0xff; 4], 0x86, &nonce);
+            let mut packet = [0u8; FIDO_PACKET];
+            assert_eq!(dev.read(&mut packet).unwrap(), FIDO_PACKET);
+            assert_eq!(packet[4], 0x86, "not an INIT reply: {packet:02x?}");
+            assert_eq!(&packet[7..15], &nonce);
+            let cid: [u8; 4] = packet[15..19].try_into().unwrap();
+            eprintln!("CTAPHID_INIT: channel {cid:02x?}, CTAPHID {} firmware {}.{}.{}", packet[19], packet[20], packet[21], packet[22]);
+
+            write_packet(&mut dev, cid, 0x90, &[0x04]); // CTAPHID_CBOR, authenticatorGetInfo
+            let mut reply = Vec::new();
+            let mut total = None;
+            while total.is_none_or(|t| reply.len() < t) {
+                assert_eq!(dev.read(&mut packet).unwrap(), FIDO_PACKET);
+                assert_eq!(&packet[..4], &cid);
+                match total {
+                    None if packet[4] == 0xbb => continue, // keep-alive
+                    None => {
+                        assert_eq!(packet[4], 0x90, "not a CBOR reply: {packet:02x?}");
+                        let t = u16::from_be_bytes([packet[5], packet[6]]) as usize;
+                        total = Some(t);
+                        reply.extend(&packet[7..7 + t.min(57)]);
+                    }
+                    Some(t) => reply.extend(&packet[5..5 + (t - reply.len()).min(59)]),
+                }
+            }
+            assert_eq!(reply[0], 0, "GetInfo failed with CTAP status {:#x}", reply[0]);
+            let text = String::from_utf8_lossy(&reply);
+            eprintln!("GetInfo: {} bytes, FIDO_2_0 {}, U2F_V2 {}", reply.len(), text.contains("FIDO_2_0"), text.contains("U2F_V2"));
+            assert!(text.contains("FIDO_2_0"));
+        })
+        .await
+        .unwrap();
+
+        if let Some(secs) = std::env::var("GHOST_TEST_HOLD").ok().and_then(|s| s.parse().ok()) {
+            eprintln!("holding the bridge for {secs} s");
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+        }
+    }
+
     #[tokio::test]
     async fn a_second_claim_on_a_slot_cancels_and_outlives_the_first() {
         let (first, mut first_cancelled) = claim_slot(create_device::Kind::Gamepad, 3).await;
