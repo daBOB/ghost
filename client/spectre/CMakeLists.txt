@@ -137,6 +137,7 @@ add_executable(spectre
   src/net/local_files.cpp
   src/net/my_folders.cpp
   src/net/session_client.cpp
+  src/net/transfer_progress.cpp
   src/net/lan_link.cpp
   src/decode/decoder.cpp
   src/decode/codec_support.cpp
@@ -315,3 +316,11 @@ target_include_directories(spectre_notices_test PRIVATE src third_party "${SPECT
 target_include_directories(spectre_notices_test PRIVATE ${SDL3_INCLUDE_DIRS})
 spectre_warnings(spectre_notices_test)
 add_test(NAME spectre_notices_test COMMAND spectre_notices_test)
+
+add_executable(spectre_transfer_progress_test
+  tests/transfer_progress_test.cpp
+  src/net/transfer_progress.cpp
+)
+target_include_directories(spectre_transfer_progress_test PRIVATE src ${SDL3_INCLUDE_DIRS})
+spectre_warnings(spectre_transfer_progress_test)
+add_test(NAME spectre_transfer_progress_test COMMAND spectre_transfer_progress_test)

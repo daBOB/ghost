@@ -206,6 +206,9 @@ std::vector<SessionMenu::Item> SessionMenu::items_for_page() const {
 				{ItemId::kControllerMode,
 					*controllers_raw_ ? "Controllers: Raw" : "Controllers: Xbox Emulation"});
 		}
+		if (file_transfer_) {
+			add(Group::kFiles, {ItemId::kCancelFileTransfer, "Cancel File Transfer"});
+		}
 		add(Group::kEnd, {ItemId::kDisconnect, "Disconnect"});
 		add(Group::kEnd, {ItemId::kEndSession, "End session"});
 		return items;
@@ -285,6 +288,7 @@ MenuAction SessionMenu::activate(size_t index) {
 		chosen_h_ = items[index].height;
 		return MenuAction::kChangeResolution;
 	case ItemId::kResolutionBack: return_to_main(ItemId::kResolution); return MenuAction::kNone;
+	case ItemId::kCancelFileTransfer: return MenuAction::kCancelFileTransfer;
 	case ItemId::kDisconnect: return MenuAction::kDisconnect;
 	case ItemId::kEndSession: set_page(Page::kConfirmEnd); return MenuAction::kNone;
 	case ItemId::kConfirmLogout: return MenuAction::kEndSession;

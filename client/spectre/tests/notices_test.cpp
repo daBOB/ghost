@@ -3,7 +3,8 @@
 
 // Plain-assert unit test for spectre's notices (ui/notices.hpp): toast
 // stacking, tags, expiry and the hover pause; the prompt's rules (Allow
-// inert at first, never on Enter, the timeout denying, queueing, cancel).
+// inert at first, never on Enter, the timeout denying, queueing, cancel);
+// the progress card (non-modal, its Cancel, the toasts below it).
 // With a directory argument, also renders each scenario over a mock
 // desktop into PPM files there, through the same draw list the renderer
 // gets, for checking the look by eye.
@@ -102,6 +103,111 @@ void test_hover_and_click() {
 	assert(!n.handle_pointer_press(100, 400, t));
 	assert(n.handle_pointer_press(1250, 60, t));
 	assert(n.toast_count() == 0);
+}
+
+// The middle of the text prim reading `label`, for clicking it.
+bool find_text(const UiDrawList &dl, const std::string &label, float *x, float *y) {
+	for (const UiTextPrim &t : dl.texts) {
+		if (t.text == label) {
+			*x = t.x + 4;
+			*y = t.y + 4;
+			return true;
+		}
+	}
+	return false;
+}
+
+void test_progress() {
+	UiFont font;
+	assert(font.build(14));
+	UiDrawList dl;
+	Notices n;
+	uint64_t t = 10 * kSec;
+	uint64_t id =
+		n.progress({"Sending 3 files to the host", "report.pdf and 1 more", "192 MB of 400 MB", 0.48}, t);
+	assert(n.progress_count() == 1 && !n.prompt_visible());
+	assert(n.tick(t));
+	// Not timed.
+	n.tick(t + 60 * kSec);
+	assert(n.progress_count() == 1);
+
+	// A small step of the bar redraws nothing; new figures do.
+	n.update_progress(id,
+		{"Sending 3 files to the host", "report.pdf and 1 more", "192 MB of 400 MB", 0.4802});
+	assert(!n.tick(t + 61 * kSec));
+	n.update_progress(id,
+		{"Sending 3 files to the host", "report.pdf and 1 more", "193 MB of 400 MB", 0.4825});
+	assert(n.tick(t + 61 * kSec));
+
+	// Above a toast, which still stacks below it.
+	n.toast({NoticeLevel::kError, "a.iso: not enough space on the host", "", 4 * kSec, ""}, t + 61 * kSec);
+	n.build(dl, font, 1280, 800, 40, t + 62 * kSec);
+	float title_y = -1, toast_y = -1;
+	for (const UiTextPrim &p : dl.texts) {
+		if (p.text == "Sending 3 files to the host") {
+			title_y = p.y;
+		} else if (p.text == "a.iso: not enough space on the host") {
+			toast_y = p.y;
+		}
+	}
+	assert(title_y >= 40 && toast_y > title_y);
+
+	// A click on the card is spectre's but does nothing; on Cancel it is
+	// reported once, and the card stays until the caller ends it.
+	float cx = 0, cy = 0;
+	assert(find_text(dl, "Cancel", &cx, &cy));
+	assert(n.handle_pointer_motion(cx, title_y + 4));
+	assert(n.handle_pointer_press(cx, title_y + 4, t));
+	assert(n.take_cancels().empty());
+	assert(n.handle_pointer_motion(cx, cy));
+	assert(n.handle_pointer_press(cx, cy, t));
+	assert(n.handle_pointer_press(cx, cy, t));
+	std::vector<uint64_t> cancels = n.take_cancels();
+	assert(cancels.size() == 1 && cancels[0] == id);
+	assert(n.progress_count() == 1);
+	n.end_progress(id);
+	assert(n.progress_count() == 0);
+	// Gone: where it was isn't spectre's any more.
+	dl.clear();
+	n.build(dl, font, 1280, 800, 40, t + 62 * kSec);
+	assert(!find_text(dl, "Cancel", &cx, &cy));
+
+	// Long names are cut short.
+	std::string name(400, 'x');
+	n.progress({"Sending to the host", name, "", 0}, t);
+	dl.clear();
+	n.build(dl, font, 1280, 800, 40, t + kSec);
+	bool cut = false;
+	for (const UiTextPrim &p : dl.texts) {
+		if (p.text.size() > 3 && p.text.compare(p.text.size() - 3, 3, "...") == 0) {
+			cut = true;
+			assert(font.text_width(p.text) * 1.1f <= 1280);
+		}
+	}
+	assert(cut);
+	// Under a prompt the card is inert: the prompt has the pointer.
+	n.prompt({NoticeLevel::kWarning, "Allow?", "", "Allow", "Deny", 30 * kSec}, t);
+	dl.clear();
+	n.build(dl, font, 1280, 800, 40, t + kSec);
+	assert(find_text(dl, "Cancel", &cx, &cy));
+	n.handle_pointer_press(cx, cy, t + kSec);
+	assert(n.take_cancels().empty());
+}
+
+void test_fit_text() {
+	UiFont font;
+	assert(font.build(14));
+	assert(fit_text(font, "short", 1000, 1.0f) == "short");
+	std::string fitted = fit_text(font, "a fairly long file name.pdf", 80, 1.0f);
+	assert(fitted.size() > 3 && fitted.substr(fitted.size() - 3) == "...");
+	assert(font.text_width(fitted) <= 80);
+	// Never through the middle of a UTF-8 sequence.
+	std::string utf8;
+	for (int i = 0; i < 40; i++) {
+		utf8 += "\xC3\xA9"; // é
+	}
+	fitted = fit_text(font, utf8, 60, 1.0f);
+	assert((fitted.size() - 3) % 2 == 0);
 }
 
 void test_prompt() {
@@ -338,6 +444,22 @@ void render_previews(const std::string &dir) {
 		n.prompt({NoticeLevel::kWarning, "second", "", "Allow", "Deny", 30 * kSec}, t);
 		render(dir, "6-prompt-fullscreen-queued", n, t + 12 * kSec, 0);
 	}
+	{
+		Notices n;
+		n.progress({"Sending 3 files to the host", "quarterly-report-2025.pdf and 1 more",
+					   "192 MB of 400 MB, 11.8 MB/s, 0:18 left", 0.48},
+			t);
+		n.toast({NoticeLevel::kError, "a.iso: not enough space on the host", "", 4 * kSec, ""}, t);
+		render(dir, "7-progress", n, later);
+		UiFont font;
+		assert(font.build(14));
+		UiDrawList dl;
+		n.build(dl, font, 1280, 520, 34, later);
+		float cx = 0, cy = 0;
+		assert(find_text(dl, "Cancel", &cx, &cy));
+		n.handle_pointer_motion(cx, cy);
+		render(dir, "8-progress-hovered", n, later);
+	}
 }
 
 } // namespace
@@ -347,6 +469,8 @@ int main(int argc, char **argv) {
 	test_toasts();
 	test_hover_and_click();
 	test_prompt();
+	test_progress();
+	test_fit_text();
 	if (argc > 1) {
 		render_previews(argv[1]);
 	}

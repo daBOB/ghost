@@ -103,6 +103,30 @@ destroyed with it.
   `FRAME_TOO_LARGE`, from an idle callback: the receiver finds out
   inside a stream callback, where the session can't be torn down.
 
+## spectre's uploads
+
+`FileTransfers` (`net/file_transfers.*`) sends what is dropped on the
+window, up to `kFileStreamsAtOnce` files at once, the rest queued.
+
+- **Batches.** A file dropped while others are still open or queued
+  joins their batch; the batch is over when the last of them ends, and
+  `on_batch_done` reports what became of it. Each file's size is read
+  when it is dropped, for the batch's total, and again when it starts.
+- **Progress.** A batch still going after half a second gets a progress
+  card in spectre's notices (`ui/notices.hpp`): the bytes the host has
+  acknowledged (`on_acked`, not just what was handed to the stream) out
+  of the batch's total, the speed over the last 3 seconds and the time
+  left (`net/transfer_progress.*`), refreshed four times a second. A
+  shorter batch only gets the toast at its end.
+- **Cancel.** The card's Cancel, or "Cancel File Transfer" in the session
+  menu (for a captured pointer, which can't reach the card), resets every
+  stream of the batch with code 0 and forgets the queue; the host deletes
+  each partial file. Files already saved stay.
+- **Telling the user.** A failure is a toast of its own at once, and the
+  rest of the batch goes on. The end of a batch is one toast: "Sent
+  report.pdf to ...", "Sent 3 files to ...", "Sent 2 of 3 files", or
+  "Cancelled sending 3 files".
+
 ## Copied files, to the client
 
 - **What was copied.** Both clipboard backends read

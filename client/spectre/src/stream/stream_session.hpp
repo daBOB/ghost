@@ -345,6 +345,10 @@ private:
 	// File transfer (gdp-spec.md §7.12): a file dropped on the window goes
 	// to the host's download folder.
 	void handle_drop_file(const char *path);
+	// The uploads' progress card: put up once a batch has run for a
+	// moment, refreshed a few times a second, and its Cancel acted on.
+	void update_upload_card(uint64_t now_us);
+	void end_upload_card();
 	// Gamepads (gdp-spec.md §8.5): SDL's gamepad API already
 	// normalizes every controller on every platform to one layout, so
 	// this is the same code on Linux, Windows and macOS. A controller
@@ -547,6 +551,12 @@ private:
 	gdp::RemoteFiles host_files_{[this](uint64_t id, const gdp::RemoteFiles::Target &target, uint64_t offset,
 									 bool listing) { request_host_file(id, target, offset, listing); }};
 	LocalFiles local_files_{[this] { return client_.open_file_stream(); }};
+	// The batch of uploads files_ is sending: when it began, its card in
+	// notices_ (0 while none is up), and how fast it's going.
+	uint64_t upload_started_us_ = 0;
+	uint64_t upload_card_ = 0;
+	uint64_t next_upload_card_us_ = 0;
+	TransferRate upload_rate_;
 #ifdef _WIN32
 	// No FUSE: the host's files are read through this, from the clipboard's
 	// own thread. Shared with the clipboard's objects, which Explorer may

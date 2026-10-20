@@ -50,7 +50,10 @@ games where that matters. spectre remembers the choice.
 Drop files on the window to send them to the host: they land in the
 host user's Downloads folder (or wherever its `[files] directory`
 points), never over a file already there, and a notice says where they
-went. Folders aren't sent, and the host has to allow it (`[files]
+went. While they go, a card in the corner shows how far along they are,
+how fast and how long is left, with a button to cancel (also in the
+session menu, for when the mouse is captured); a cancelled file is
+deleted on the host, and those already sent stay. Folders aren't sent, and the host has to allow it (`[files]
 receive`, on by default; [configuration](../reference/configuration.md)).
 
 Copy and paste of files works both ways through the desktop's own file

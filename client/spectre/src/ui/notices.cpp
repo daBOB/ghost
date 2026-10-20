@@ -118,6 +118,21 @@ std::vector<std::string> wrap_text(const UiFont &font, const std::string &text, 
 	return lines;
 }
 
+std::string fit_text(const UiFont &font, const std::string &text, float max_w, float scale) {
+	if (font.text_width(text) * scale <= max_w) {
+		return text;
+	}
+	std::string cut = text;
+	while (!cut.empty() && font.text_width(cut + "...") * scale > max_w) {
+		// A whole UTF-8 sequence at a time: its continuation bytes, then its lead.
+		while (cut.size() > 1 && ((unsigned char)cut.back() & 0xC0) == 0x80) {
+			cut.pop_back();
+		}
+		cut.pop_back();
+	}
+	return cut + "...";
+}
+
 void Notices::toast(ToastSpec spec, uint64_t now_us) {
 	if (!spec.tag.empty()) {
 		for (Toast &t : toasts_) {
@@ -189,6 +204,51 @@ void Notices::cancel(uint64_t id) {
 	}
 }
 
+uint64_t Notices::progress(ProgressSpec spec, uint64_t now_us) {
+	Card c;
+	c.id = next_id_++;
+	c.spec = std::move(spec);
+	c.shown_us = now_us;
+	cards_.push_back(std::move(c));
+	dirty_ = true;
+	return cards_.back().id;
+}
+
+void Notices::update_progress(uint64_t id, ProgressSpec spec) {
+	for (Card &c : cards_) {
+		if (c.id != id) {
+			continue;
+		}
+		// The bar moves by whole pixels: smaller steps redraw nothing.
+		if (c.spec.title != spec.title || c.spec.detail != spec.detail || c.spec.figures != spec.figures ||
+			c.spec.cancel_label != spec.cancel_label || std::fabs(c.spec.fraction - spec.fraction) >= 0.001) {
+			dirty_ = true;
+		}
+		c.spec = std::move(spec);
+		return;
+	}
+}
+
+void Notices::end_progress(uint64_t id) {
+	auto it = std::find_if(cards_.begin(), cards_.end(), [&](const Card &c) { return c.id == id; });
+	if (it == cards_.end()) {
+		return;
+	}
+	cards_.erase(it);
+	if (hovered_card_ == id) {
+		hovered_card_ = 0;
+		hovered_cancel_ = false;
+	}
+	cancels_.erase(std::remove(cancels_.begin(), cancels_.end(), id), cancels_.end());
+	dirty_ = true;
+}
+
+std::vector<uint64_t> Notices::take_cancels() {
+	std::vector<uint64_t> out;
+	out.swap(cancels_);
+	return out;
+}
+
 std::vector<PromptAnswer> Notices::take_answers() {
 	std::vector<PromptAnswer> out;
 	out.swap(answers_);
@@ -236,7 +296,9 @@ bool Notices::tick(uint64_t now_us) {
 		}
 	}
 	bool fading = std::any_of(toasts_.begin(), toasts_.end(),
-		[&](const Toast &t) { return now_us - t.shown_us < kFadeInUs; });
+					  [&](const Toast &t) { return now_us - t.shown_us < kFadeInUs; }) ||
+		std::any_of(cards_.begin(), cards_.end(),
+			[&](const Card &c) { return now_us - c.shown_us < kFadeInUs; });
 	// One more redraw after the last fade step, to land on full opacity.
 	changed = changed || fading || fading_;
 	fading_ = fading;
@@ -296,6 +358,20 @@ bool Notices::handle_pointer_motion(float x, float y) {
 		}
 		return true;
 	}
+	uint64_t card = 0;
+	bool cancel = false;
+	for (const CardRects &r : card_rects_) {
+		if (r.card.contains(x, y)) {
+			card = r.id;
+			cancel = r.cancel.contains(x, y);
+			break;
+		}
+	}
+	if (card != hovered_card_ || cancel != hovered_cancel_) {
+		hovered_card_ = card;
+		hovered_cancel_ = cancel;
+		dirty_ = true;
+	}
 	uint64_t hovered = 0;
 	for (const auto &[id, r] : toast_rects_) {
 		if (r.contains(x, y)) {
@@ -307,12 +383,14 @@ bool Notices::handle_pointer_motion(float x, float y) {
 		hovered_toast_ = hovered;
 		dirty_ = true;
 	}
-	return hovered != 0;
+	return hovered != 0 || card != 0;
 }
 
 void Notices::handle_pointer_left() {
-	if (hovered_toast_ != 0 || hovered_button_ != Button::kNone) {
+	if (hovered_toast_ != 0 || hovered_card_ != 0 || hovered_button_ != Button::kNone) {
 		hovered_toast_ = 0;
+		hovered_card_ = 0;
+		hovered_cancel_ = false;
 		hovered_button_ = Button::kNone;
 		dirty_ = true;
 	}
@@ -329,6 +407,17 @@ bool Notices::handle_pointer_press(float x, float y, uint64_t now_us) {
 			break;
 		case Button::kDeny: answer(false, false); break;
 		case Button::kNone: break;
+		}
+		return true;
+	}
+	for (const CardRects &r : card_rects_) {
+		if (!r.card.contains(x, y)) {
+			continue;
+		}
+		// Anywhere else on the card: spectre's, and nothing happens.
+		if (r.cancel.contains(x, y) && std::find(cancels_.begin(), cancels_.end(), r.id) == cancels_.end()) {
+			cancels_.push_back(r.id);
+			dirty_ = true;
 		}
 		return true;
 	}
@@ -352,8 +441,9 @@ bool Notices::handle_pointer_press(float x, float y, uint64_t now_us) {
 void Notices::build(UiDrawList &out, const UiFont &font, int win_w, int win_h, float top,
 	uint64_t now_us) const {
 	toast_rects_.clear();
+	card_rects_.clear();
 	allow_rect_ = deny_rect_ = Rect{};
-	if ((toasts_.empty() && prompts_.empty()) || !font.valid()) {
+	if ((toasts_.empty() && prompts_.empty() && cards_.empty()) || !font.valid()) {
 		return;
 	}
 	const Metrics m = metrics(font, win_w);
@@ -451,6 +541,72 @@ void Notices::build(UiDrawList &out, const UiFont &font, int win_w, int win_h, f
 		out.text(tx, ty + btn_pad_y + (m.body_lh - m.body_lh / kBodyScale) / 2, kDim, status);
 
 		y += h + 2 * bw + m.gap * 2;
+	}
+
+	for (const Card &c : cards_) {
+		const UiColor acc = accent(NoticeLevel::kInfo);
+		float alpha = std::min(1.0f, (float)(now_us - c.shown_us) / (float)kFadeInUs);
+		const bool see_through = c.id == hovered_card_ && prompts_.empty();
+		if (see_through) {
+			alpha = kHoverAlpha;
+		}
+		if (!prompts_.empty()) {
+			alpha *= 0.5f;
+		}
+		const std::string title = fit_text(font, c.spec.title, text_w, kTitleScale);
+		const std::string detail =
+			c.spec.detail.empty() ? std::string() : fit_text(font, c.spec.detail, text_w, kBodyScale);
+		const float btn_pad_x = std::round(3 * m.s), btn_pad_y = std::round(1.5f * m.s);
+		const float btn_h = m.body_lh + 2 * btn_pad_y;
+		const float btn_w = std::ceil(font.text_width(c.spec.cancel_label) * kBodyScale + 2 * btn_pad_x);
+		const float bar_h = std::max(4.0f, std::round(1.5f * m.s));
+
+		// Always the widest: the bar and the figures change all the time,
+		// and a card that changed width with them would jitter.
+		const float w = m.max_w;
+		const float h = 2 * m.pad_y + m.title_lh + (detail.empty() ? 0.0f : m.gap / 2 + m.body_lh) + m.gap +
+			bar_h + m.gap + btn_h;
+		const float x = std::floor((float)win_w - m.margin - w);
+		const float b = m.border;
+		out.drop_shadow(x - b, y - b, w + 2 * b, h + 2 * b, m.s, alpha);
+		out.rect(x - b, y - b, w + 2 * b, h + 2 * b, faded(kBorder, alpha));
+		out.rect(x, y, w, h, faded(kPanel, alpha));
+		out.rect(x, y, m.stripe, h, faded(acc, alpha));
+
+		const float tx = x + m.stripe + m.pad_x;
+		float ty = y + m.pad_y;
+		out.text(tx, ty, faded(acc, alpha), title, kTitleScale);
+		ty += m.title_lh;
+		if (!detail.empty()) {
+			ty += m.gap / 2;
+			out.text(tx, ty, faded(kText, alpha), detail, kBodyScale);
+			ty += m.body_lh;
+		}
+		ty += m.gap;
+		const float fill = std::round(text_w * (float)std::clamp(c.spec.fraction, 0.0, 1.0));
+		out.rect(tx, ty, text_w, bar_h, faded(kCell, alpha));
+		if (fill > 0) {
+			out.rect(tx, ty, fill, bar_h, faded(acc, alpha));
+		}
+		ty += bar_h + m.gap;
+
+		// Cancel at the right, solid even while the rest is see-through.
+		const Rect cancel{x + w - m.pad_x - btn_w, ty, btn_w, btn_h};
+		const float btn_alpha = see_through ? 1.0f : alpha;
+		const bool lit = see_through && hovered_cancel_;
+		if (lit) {
+			out.rect(cancel.x - b, cancel.y - b, cancel.w + 2 * b, cancel.h + 2 * b, kText);
+		}
+		out.rect(cancel.x, cancel.y, cancel.w, cancel.h, faded(lit ? kHighlight : kCell, btn_alpha));
+		out.text(cancel.x + btn_pad_x, cancel.y + btn_pad_y, faded(kText, btn_alpha), c.spec.cancel_label,
+			kBodyScale);
+		if (!c.spec.figures.empty()) {
+			std::string figures = fit_text(font, c.spec.figures, cancel.x - m.gap - tx, 1.0f);
+			out.text(tx, ty + btn_pad_y + (m.body_lh - m.body_lh / kBodyScale) / 2, faded(kDim, alpha),
+				figures);
+		}
+		card_rects_.push_back({c.id, Rect{x - b, y - b, w + 2 * b, h + 2 * b}, cancel});
+		y += h + 2 * b + m.gap;
 	}
 
 	const float x = std::floor((float)win_w - m.margin - toast_w);

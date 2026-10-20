@@ -27,6 +27,14 @@
 //   - It never asks for a secret.
 // Prompts queue: one shows at a time, in the order asked.
 //
+// A progress card follows something that takes a while (an upload): a
+// title, a line of detail, a bar, a line of figures and a Cancel button.
+// It stays until the caller ends it, and isn't modal: it sits between the
+// prompt and the toasts and only takes the clicks that land on it. Under
+// the pointer it turns see-through like a toast, all but its Cancel
+// button, which stays clickable. Cancel has no arming delay: a click the
+// host times to land on it only stops a transfer.
+//
 // Pure state + layout, like ui/session_menu.hpp: the caller feeds it time,
 // keys and pointer positions in window pixels, drains take_answers(), and
 // draws what build() appends.
@@ -70,6 +78,14 @@ struct PromptSpec {
 	uint64_t timeout_us = 30000000;
 };
 
+struct ProgressSpec {
+	std::string title;
+	std::string detail;  // optional, under the title; cut short to fit
+	std::string figures; // optional, beside Cancel, dimmed
+	double fraction = 0; // of the bar, 0 to 1
+	std::string cancel_label = "Cancel";
+};
+
 struct PromptAnswer {
 	uint64_t id = 0;
 	bool allowed = false;
@@ -97,6 +113,16 @@ public:
 	// Answers given since the last call, in order.
 	std::vector<PromptAnswer> take_answers();
 
+	// Puts up a progress card; returns its id.
+	uint64_t progress(ProgressSpec spec, uint64_t now_us);
+	// Changes what card `id` shows, if it's still up.
+	void update_progress(uint64_t id, ProgressSpec spec);
+	// Takes card `id` down.
+	void end_progress(uint64_t id);
+	// Cards whose Cancel was clicked since the last call, in order. The
+	// card stays up until the caller ends it.
+	std::vector<uint64_t> take_cancels();
+
 	// Retires timed-out toasts and prompts and reports whether anything
 	// on screen changed since the last call (an expiry, a fade step, the
 	// countdown's second, Allow arming): the caller redraws then, since an
@@ -120,6 +146,7 @@ public:
 	void build(UiDrawList &out, const UiFont &font, int win_w, int win_h, float top, uint64_t now_us) const;
 
 	size_t toast_count() const { return toasts_.size(); }
+	size_t progress_count() const { return cards_.size(); }
 
 private:
 	struct Toast {
@@ -133,6 +160,11 @@ private:
 		uint64_t id = 0;
 		PromptSpec spec;
 		uint64_t shown_us = 0; // 0 while queued behind another
+	};
+	struct Card {
+		uint64_t id = 0;
+		ProgressSpec spec;
+		uint64_t shown_us = 0;
 	};
 	struct Rect {
 		float x = 0, y = 0, w = 0, h = 0;
@@ -148,8 +180,12 @@ private:
 	std::deque<Toast> toasts_; // newest first
 	std::deque<Prompt> prompts_;
 	std::vector<PromptAnswer> answers_;
+	std::vector<Card> cards_; // oldest first
+	std::vector<uint64_t> cancels_;
 	uint64_t next_id_ = 1;
 	uint64_t hovered_toast_ = 0;
+	uint64_t hovered_card_ = 0;
+	bool hovered_cancel_ = false; // ... and over its Cancel button
 	Button hovered_button_ = Button::kNone;
 	// What tick() last saw, to tell whether a redraw is due.
 	int64_t last_countdown_s_ = -1;
@@ -162,11 +198,19 @@ private:
 
 	// The last build()'s layout, for hit testing.
 	mutable std::vector<std::pair<uint64_t, Rect>> toast_rects_;
+	struct CardRects {
+		uint64_t id;
+		Rect card, cancel;
+	};
+	mutable std::vector<CardRects> card_rects_;
 	mutable Rect allow_rect_, deny_rect_;
 };
 
 // Breaks `text` into lines no wider than `max_w` at `scale`, at spaces and
 // at '\n'. A single word wider than `max_w` gets a line of its own.
 std::vector<std::string> wrap_text(const UiFont &font, const std::string &text, float max_w, float scale);
+
+// `text` cut at the end with "..." to be no wider than `max_w` at `scale`.
+std::string fit_text(const UiFont &font, const std::string &text, float max_w, float scale);
 
 } // namespace spectre

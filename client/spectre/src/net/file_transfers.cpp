@@ -101,6 +101,16 @@ bool FileTransfers::upload(const std::string &path, std::string *error) {
 	job->id = next_id_++;
 	job->name = std::move(name);
 	job->path = path;
+	// For the batch's total until it starts, when it is read again.
+	job->size = std::filesystem::file_size(p, ec);
+	if (ec) {
+		job->size = 0;
+	}
+	if (batch_.files == 0) {
+		batch_.first = job->name;
+	}
+	batch_.files++;
+	batch_.bytes += job->size;
 	queued_.push_back(std::move(job));
 	start_more();
 	return true;
@@ -118,6 +128,20 @@ void FileTransfers::tick(uint64_t now_us) {
 	}
 }
 
+void FileTransfers::cancel() {
+	if (batch_.files == 0) {
+		return;
+	}
+	UploadProgress done = progress();
+	done.cancelled = pending();
+	done.current.clear();
+	SLOG_INFO("files: cancelled, %zu of %zu not sent", done.cancelled, done.files);
+	cancel_all();
+	if (on_batch_done) {
+		on_batch_done(done);
+	}
+}
+
 void FileTransfers::cancel_all() {
 	queued_.clear();
 	for (auto &[id, job] : active_) {
@@ -126,6 +150,33 @@ void FileTransfers::cancel_all() {
 		}
 	}
 	active_.clear();
+	batch_ = UploadProgress{};
+}
+
+UploadProgress FileTransfers::progress() const {
+	UploadProgress p = batch_;
+	for (const auto &[id, job] : active_) {
+		p.done += std::min(job->acked, job->size);
+	}
+	// The oldest still going: the open one with the lowest id, else the
+	// next in the queue.
+	if (!active_.empty()) {
+		p.current = active_.begin()->second->name;
+	} else if (!queued_.empty()) {
+		p.current = queued_.front()->name;
+	}
+	return p;
+}
+
+void FileTransfers::end_batch_if_done() {
+	if (pending() > 0 || batch_.files == 0) {
+		return;
+	}
+	UploadProgress done = batch_;
+	batch_ = UploadProgress{};
+	if (on_batch_done) {
+		on_batch_done(done);
+	}
 }
 
 void FileTransfers::start_more() {
@@ -141,7 +192,12 @@ void FileTransfers::start_more() {
 void FileTransfers::start(Job *job) {
 	std::filesystem::path p = fs_path(job->path);
 	std::error_code ec;
+	uint64_t was = job->size;
 	job->size = std::filesystem::file_size(p, ec);
+	if (ec) {
+		job->size = 0;
+	}
+	batch_.bytes = batch_.bytes - was + job->size;
 	if (!ec) {
 		job->in.open(p, std::ios::binary);
 	}
@@ -232,6 +288,9 @@ void FileTransfers::succeed(Job *job, const std::string &where) {
 	std::unique_ptr<Job> owned = std::move(it->second);
 	active_.erase(it);
 	std::string name = owned->name;
+	batch_.sent++;
+	batch_.done += owned->size;
+	batch_.where = where;
 	// Our direction ended with FIN: the stream goes gracefully.
 	owned.reset();
 	SLOG_INFO("files: the host saved \"%s\" in %s", name.c_str(), where.c_str());
@@ -239,6 +298,7 @@ void FileTransfers::succeed(Job *job, const std::string &where) {
 		on_uploaded(name, where);
 	}
 	start_more();
+	end_batch_if_done();
 }
 
 void FileTransfers::fail(Job *job, const std::string &why, bool reset) {
@@ -252,12 +312,15 @@ void FileTransfers::fail(Job *job, const std::string &why, bool reset) {
 		owned->stream->reset(0); // gdp-spec.md §7.12: a cancel is a reset, code 0
 	}
 	std::string name = owned->name;
+	batch_.failed++;
+	batch_.bytes -= owned->size;
 	owned.reset();
 	SLOG_INFO("files: \"%s\" failed: %s", name.c_str(), why.c_str());
 	if (on_failed) {
 		on_failed(name, why);
 	}
 	start_more();
+	end_batch_if_done();
 }
 
 } // namespace spectre

@@ -166,13 +166,18 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	client_.on_diagnostics_request = [this] { return diagnostics_text(); };
 	client_.on_file_list = [this](const gdp::session::FileList &list) { on_host_file_list(list); };
 	client_.on_file_fetch = [this](const gdp::session::FileFetch &fetch) { local_files_.answer(fetch); };
-	files_.on_uploaded = [this](const std::string &name, const std::string &where) {
-		notify(NoticeLevel::kSuccess, where.empty() ? "Sent " + name : "Sent " + name + " to " + where,
-			4000000);
-		mark_ui_dirty();
-	};
+	// What was sent is said once the batch is over (on_batch_done); a
+	// failure is said at once, and the rest of the batch goes on.
 	files_.on_failed = [this](const std::string &name, const std::string &why) {
 		notify(NoticeLevel::kError, name + ": " + why, 5000000);
+		mark_ui_dirty();
+	};
+	files_.on_batch_done = [this](const UploadProgress &p) {
+		end_upload_card();
+		ToastSpec summary = upload_summary(p);
+		if (!summary.title.empty()) {
+			notices_.toast(std::move(summary), gdp::monotonic_us());
+		}
 		mark_ui_dirty();
 	};
 	// Raw controllers (gdp-spec.md §8.6): the host's requests go to the
@@ -700,6 +705,7 @@ void StreamSession::main_loop() {
 			run_demo_notices(now_us);
 		}
 		files_.tick(now_us);
+		update_upload_card(now_us);
 		if (next_my_scan_us_ != 0 && now_us >= next_my_scan_us_) {
 			rescan_my_folders();
 		}
@@ -957,6 +963,7 @@ void StreamSession::on_disconnected(const std::string &reason) {
 	disconnected_ = true;
 	disconnect_reason_ = reason;
 	files_.cancel_all();
+	end_upload_card();
 	local_files_.cancel_all();
 	if (own_files_offer_ && sdl_initialized_) {
 		SDL_ClearClipboardData(); // paths into a mount about to go
@@ -2217,6 +2224,7 @@ void StreamSession::handle_drop_file(const char *path) {
 		return;
 	}
 	std::string error;
+	bool new_batch = files_.pending() == 0;
 	if (!files_.upload(path, &error)) {
 		std::string name = path;
 		size_t slash = name.find_last_of("/\\");
@@ -2224,10 +2232,49 @@ void StreamSession::handle_drop_file(const char *path) {
 			name.erase(0, slash + 1);
 		}
 		notify(NoticeLevel::kError, name + ": " + error, 4000000);
-	} else {
-		notify(NoticeLevel::kInfo, "Sending to the host...", 3000000);
+	} else if (new_batch) {
+		upload_started_us_ = gdp::monotonic_us();
+		upload_rate_.reset();
 	}
 	mark_ui_dirty();
+}
+
+void StreamSession::update_upload_card(uint64_t now_us) {
+	// Shown only once a batch has gone on this long, so a small file
+	// doesn't flash a card before its "Sent" toast.
+	constexpr uint64_t kCardDelayUs = 500000;
+	constexpr uint64_t kCardRefreshUs = 250000;
+	for (uint64_t id : notices_.take_cancels()) {
+		if (id == upload_card_) {
+			files_.cancel(); // on_batch_done takes the card down
+		}
+	}
+	if (files_.pending() == 0) {
+		return;
+	}
+	UploadProgress p = files_.progress();
+	upload_rate_.sample(now_us, p.done);
+	if (upload_card_ == 0 && now_us - upload_started_us_ < kCardDelayUs) {
+		return;
+	}
+	if (now_us < next_upload_card_us_) {
+		return;
+	}
+	next_upload_card_us_ = now_us + kCardRefreshUs;
+	ProgressSpec card = upload_card(p, upload_rate_.bytes_per_s());
+	if (upload_card_ == 0) {
+		upload_card_ = notices_.progress(std::move(card), now_us);
+	} else {
+		notices_.update_progress(upload_card_, std::move(card));
+	}
+}
+
+void StreamSession::end_upload_card() {
+	if (upload_card_ != 0) {
+		notices_.end_progress(upload_card_);
+		upload_card_ = 0;
+	}
+	next_upload_card_us_ = 0;
 }
 
 void StreamSession::handle_key(const SDL_KeyboardEvent &key) {
@@ -2840,6 +2887,7 @@ void StreamSession::open_menu(bool confirm_end) {
 	menu_.set_actual_size(actual_size_);
 	menu_.set_controller_mode(
 		client_.hid_enabled() ? std::optional<bool>(options_.raw_gamepads) : std::nullopt);
+	menu_.set_file_transfer(files_.pending() > 0);
 	stop_edge_push();
 	menu_.set_resolution(display_.width, display_.height);
 	uint32_t screen_w = 0, screen_h = 0;
@@ -2929,6 +2977,10 @@ void StreamSession::apply_menu_action(MenuAction action) {
 	case MenuAction::kToggleFullscreen:
 		toggle_fullscreen();
 		close_menu();
+		break;
+	case MenuAction::kCancelFileTransfer:
+		close_menu();
+		files_.cancel();
 		break;
 	case MenuAction::kToggleControllerMode:
 		close_menu();

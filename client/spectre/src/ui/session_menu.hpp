@@ -13,14 +13,16 @@
 // slider for this machine's own output when the caller has one), display
 // (fullscreen except in kiosk mode, the view, fit to window or actual
 // size, the remote resolution, lossless on a refinement session,
-// statistics), input (mouse capture, mouse sensitivity), then Disconnect
-// and End session; Esc closes it. The confirmation step is there because
-// a logout has no undo, and unsaved work in the remote desktop is at
-// stake. An X in the top-right corner closes it from any page. Once the
-// logout is on the wire the menu is gone and the caller shows its own
-// "logging out" notice. Pure state and layout: it emits a UiDrawList and
-// knows nothing about Vulkan or the network; the caller performs whatever
-// MenuAction it returns.
+// statistics), input (mouse capture, mouse sensitivity), Cancel File
+// Transfer while uploads are going (for when the pointer is captured and
+// can't reach the progress card), then Disconnect and End session; Esc
+// closes it. The confirmation step is there because a logout has no
+// undo, and unsaved work in the remote desktop is at stake. An X in the
+// top-right corner closes it from any page. Once the logout is on the
+// wire the menu is gone and the caller shows its own "logging out"
+// notice. Pure state and layout: it emits a UiDrawList and knows nothing
+// about Vulkan or the network; the caller performs whatever MenuAction it
+// returns.
 #pragma once
 
 #include "ui/draw_list.hpp"
@@ -51,10 +53,11 @@ enum class MenuAction {
 	// set_speaker_muted() / set_mic_muted() (the menu stays open).
 	kToggleSpeakerMute,
 	kToggleMicMute,
-	kChangeResolution, // a new remote resolution was picked: read chosen_width()/chosen_height()
-	kDisconnect,       // close spectre, leaving the remote session running
-	kEndSession,       // send LogoutRequest (the user confirmed)
-	kClose,            // hide the menu
+	kChangeResolution,   // a new remote resolution was picked: read chosen_width()/chosen_height()
+	kCancelFileTransfer, // stop the uploads going (the caller also closes the menu)
+	kDisconnect,         // close spectre, leaving the remote session running
+	kEndSession,         // send LogoutRequest (the user confirmed)
+	kClose,              // hide the menu
 };
 
 class SessionMenu {
@@ -105,6 +108,9 @@ public:
 	// open). Owned by the caller.
 	void set_speaker_muted(std::optional<bool> muted) { speaker_muted_ = muted; }
 	void set_mic_muted(std::optional<bool> muted) { mic_muted_ = muted; }
+	// Whether uploads are going, for the Cancel File Transfer row. Owned by
+	// the caller (FileTransfers::pending()).
+	void set_file_transfer(bool active) { file_transfer_ = active; }
 	// Kiosk mode (StreamOptions::kiosk): no fullscreen row at all.
 	void set_kiosk(bool kiosk) { kiosk_ = kiosk; }
 	// The remote output's current size, shown on the main page and marked
@@ -170,13 +176,14 @@ private:
 		kResolution,
 		kResolutionChoice,
 		kResolutionBack,
+		kCancelFileTransfer,
 		kDisconnect,
 		kEndSession,
 		kConfirmLogout,
 		kCancelConfirm,
 	};
 	// The main page's groups, set apart by gaps.
-	enum class Group { kNone, kAudio, kDisplay, kInput, kEnd };
+	enum class Group { kNone, kAudio, kDisplay, kInput, kFiles, kEnd };
 	struct Item {
 		ItemId id;
 		std::string label;
@@ -228,6 +235,7 @@ private:
 	bool fullscreen_ = false;
 	bool actual_size_ = false;
 	bool kiosk_ = false;
+	bool file_transfer_ = false;
 	double mouse_sensitivity_ = 1.0;
 	std::optional<double> volume_;
 	std::optional<bool> controllers_raw_;
