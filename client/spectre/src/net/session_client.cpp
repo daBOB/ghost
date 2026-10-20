@@ -991,6 +991,7 @@ void SessionClient::request_keyframe() {
 
 void SessionClient::send_clipboard(const std::string &utf8) {
 	if (!control_ || !accepted_ || !clipboard_enabled_) {
+		SLOG_DEBUG("clipboard: not sent, the session isn't up or has no clipboard");
 		return;
 	}
 	if (utf8.size() > gdp::kMaxClipboardBytes) {
@@ -1002,8 +1003,11 @@ void SessionClient::send_clipboard(const std::string &utf8) {
 		// Empty (an unfocused SDL window on Wayland reads ""), or the very
 		// text wraith just sent us -- forwarding that back is how a copy
 		// ping-pongs forever.
+		SLOG_DEBUG("clipboard: %zu bytes not sent: %s", utf8.size(),
+			utf8.empty() ? "empty" : "the host's own text, or what we sent last");
 		return;
 	}
+	SLOG_DEBUG("clipboard: sending %zu bytes to the host", utf8.size());
 	clipboard_echo_.note_sent(utf8);
 	gdp::session::ControlEnvelope env;
 	auto *clipboard = env.mutable_clipboard();

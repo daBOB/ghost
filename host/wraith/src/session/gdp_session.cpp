@@ -1098,11 +1098,15 @@ void GdpSession::handle_clipboard_data(const gdp::session::ClipboardData &clipbo
 		return;
 	}
 	const std::string &text = clipboard.data();
+	// Lengths and reasons only, never the text.
 	if (!clipboard_echo_.should_apply(text)) {
+		WLOG_DEBUG("clipboard: %zu bytes from the client not applied: %s", text.size(),
+			text.empty() ? "empty" : "what we sent it last, or applied already");
 		return;
 	}
 	ClipboardSink *sink = host_.session().clipboard();
 	if (!sink) {
+		WLOG_DEBUG("clipboard: %zu bytes from the client held until the clipboard is up", text.size());
 		// Negotiated, but the backend's sink isn't up yet (the screencast
 		// startup window). Held rather than dropped: start_clipboard_sync()
 		// applies it the moment the sink arrives.
@@ -1113,6 +1117,7 @@ void GdpSession::handle_clipboard_data(const gdp::session::ClipboardData &clipbo
 	// selection-owner change for our own write, and that must not come
 	// back as a fresh local change.
 	clipboard_echo_.note_applied(text);
+	WLOG_DEBUG("clipboard: applying %zu bytes from the client", text.size());
 	sink->set_text(text);
 }
 

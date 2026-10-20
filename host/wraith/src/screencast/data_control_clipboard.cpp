@@ -90,9 +90,12 @@ struct DataControlClipboard::Impl {
 		int32_t fd) {
 		auto *impl = static_cast<Impl *>(data);
 		if (source != impl->source) {
+			WLOG_DEBUG("clipboard: a paste asked an old selection of ours for %s; refused",
+				mime_type ? mime_type : "?");
 			::close(fd);
 			return;
 		}
+		WLOG_DEBUG("clipboard: a paste asked for %s", mime_type ? mime_type : "?");
 		impl->owner->write_pipe(fd, impl->own_files.empty()
 				? clipboard_payload_for_mime(impl->own_text, mime_type)
 				: gdp::copied_files_payload(mime_type ? mime_type : "", impl->own_files));
@@ -105,6 +108,7 @@ struct DataControlClipboard::Impl {
 			return;
 		}
 		// Another client took the selection from us.
+		WLOG_DEBUG("clipboard: another client took the selection from ours");
 		ext_data_control_source_v1_destroy(impl->source);
 		impl->source = nullptr;
 		impl->own_text.clear();
@@ -250,6 +254,7 @@ void DataControlClipboard::write_pipe(int fd, std::string payload) {
 void DataControlClipboard::set_text(const std::string &utf8) {
 	Impl &i = *impl_;
 	if (!i.manager || !i.device) {
+		WLOG_DEBUG("clipboard: can't set the selection, data-control isn't bound");
 		return;
 	}
 	i.own_text = utf8;
@@ -298,6 +303,7 @@ bool DataControlClipboard::offer(const std::vector<std::string> &mimes) {
 	// core wl_data_device protocol: a headless wraith has no surface to
 	// focus.
 	ext_data_control_device_v1_set_selection(i.device, source);
+	WLOG_DEBUG("clipboard: selection set, %zu types offered", mimes.size());
 	if (previous) {
 		// Destroyed after the replacement is in place: doing it first
 		// would clear the selection in between.

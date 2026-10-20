@@ -1937,8 +1937,10 @@ void StreamSession::close_gamepads() {
 }
 
 void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
+	// Lengths and reasons only, never the text: it may be a password.
 	if (event.owner) {
 		// Our own SDL_SetClipboardText or files offer: not a local copy.
+		SLOG_DEBUG("clipboard: update is our own write, ignored");
 		return;
 	}
 #ifdef _WIN32
@@ -1949,9 +1951,15 @@ void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
 #endif
 	own_files_offer_ = false;
 	if (!client_.clipboard_enabled()) {
+		SLOG_DEBUG("clipboard: update ignored, the session has no clipboard");
 		return;
 	}
-	if (announce_local_files() || !SDL_HasClipboardText()) {
+	if (announce_local_files()) {
+		SLOG_DEBUG("clipboard: update holds files, announced as files");
+		return;
+	}
+	if (!SDL_HasClipboardText()) {
+		SLOG_DEBUG("clipboard: update holds no text (%d types)", event.num_mime_types);
 		return;
 	}
 	// The text variants (rather than the generic SDL_SetClipboardData) do
@@ -1960,6 +1968,7 @@ void StreamSession::handle_clipboard_update(const SDL_ClipboardEvent &event) {
 	// work on X11, Wayland, Windows and macOS alike.
 	char *text = SDL_GetClipboardText();
 	if (!text) {
+		SLOG_DEBUG("clipboard: update's text couldn't be read");
 		return;
 	}
 	// An unfocused window on Wayland reads "", which is "nothing readable
