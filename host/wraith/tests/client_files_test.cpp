@@ -150,7 +150,7 @@ int main() {
 	gdp::Transport server, client;
 	std::deque<gdp::session::FileFetch> control; // host -> client, carried by hand
 	auto client_files = std::make_unique<wraith::ClientFiles>(
-		loop, [&](const gdp::session::FileFetch &f) { control.push_back(f); }, true, "saiko-pc01");
+		loop, [&](const gdp::session::FileFetch &f) { control.push_back(f); }, true, "office-pc");
 	wraith::FileReceiver receiver(loop, dir.string(), [](uint64_t code) { fprintf(stderr, "protocol error %llu\n", (unsigned long long)code); },
 		[](const std::string &, const std::string &) {});
 	receiver.on_answer = [&](std::unique_ptr<gdp::Stream> s, const gdp::session::FileAnswer &a,
@@ -266,10 +266,10 @@ int main() {
 	const fs::path share_dir = mnt / "shares" / "client-shared";
 	std::string gtk = read_file(wraith::gtk_bookmarks_path());
 	// Labelled with the client's name.
-	CHECK(gtk.find(gdp::file_uri(share_dir.string()) + " client-shared (saiko-pc01)") != std::string::npos);
-	CHECK(read_file(wraith::kde_places_path()).find("<title>client-shared (saiko-pc01)</title>") != std::string::npos);
+	CHECK(gtk.find(gdp::file_uri(share_dir.string()) + " client-shared (office-pc)") != std::string::npos);
+	CHECK(read_file(wraith::kde_places_path()).find("<title>client-shared (office-pc)</title>") != std::string::npos);
 	// A name the client sends is kept only if it is a usable one.
-	CHECK(wraith::ClientFiles::usable_client_name("saiko-pc01") == "saiko-pc01");
+	CHECK(wraith::ClientFiles::usable_client_name("office-pc") == "office-pc");
 	CHECK(wraith::ClientFiles::usable_client_name("").empty());
 	CHECK(wraith::ClientFiles::usable_client_name("pc\nfile:///etc evil").empty());
 	CHECK(wraith::ClientFiles::usable_client_name("a/b").empty());

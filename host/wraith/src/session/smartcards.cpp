@@ -135,7 +135,17 @@ bool Smartcards::installed(Paths *paths) {
 			paths->driver = beside;
 		}
 	}
-	return !paths->pcscd.empty() && access(paths->driver.c_str(), R_OK) == 0;
+	if (paths->pcscd.empty() || access(paths->driver.c_str(), R_OK) != 0) {
+		return false;
+	}
+	// pcscd won't start without it, and can't make it as the user
+	// (packaging/system/tmpfiles.d/ghost.conf makes it).
+	struct stat st;
+	if (stat("/run/pcscd", &st) != 0 || !S_ISDIR(st.st_mode)) {
+		WLOG_ERROR("smartcard: /run/pcscd is missing (ghost's tmpfiles.d makes it: systemd-tmpfiles --create)");
+		return false;
+	}
+	return true;
 #else
 	(void)paths;
 	return false;

@@ -55,6 +55,7 @@ are in `$PREFIX/share/doc/ghost/`.
 | `/run/ghost/<uid>.sock` | That user's wraith to its ghostseat; the user's, 0600. wraith talks only if the peer is root. |
 | `/run/ghost/events.sock` | Every ghostseat to ghostd; ghostd's, 0600. |
 | `/run/ghost/ghostlogin.sock` | ghostlogin to ghostd; ghostd's, 0600. |
+| `/run/pcscd/` | pcsc-lite's directory, made by ghost's tmpfiles.d (root, 0755) where the system's pcscd hasn't: a session's own pcscd won't start without it and can't make it ([gdp-spec.md §8.8](../spec/gdp-spec.md#88-smart-cards)). |
 | `/run/ghost/spent-tickets/` | The authentication tickets ghostseat has accepted, one empty file per nonce, pruned after their ten minutes; root, 0700 ([authentication](../design/login-and-sessions.md#authentication)). |
 | `$XDG_RUNTIME_DIR/wraith.sock` | The running wraith's own control socket, mode 0600, for that user's commands (`wraith --report`). |
 | `$XDG_RUNTIME_DIR/ghost/smartcard/` | The session's smart card forwarding, mode 0700: `pcscd.comm`, the socket of the session's own pcscd (the desktop's `PCSCLITE_CSOCK_NAME`); `reader-N.sock`, each forwarded reader's, which the driver connects to; `readers/`, pcscd's reader configuration, written by wraith. |

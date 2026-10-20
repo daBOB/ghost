@@ -54,7 +54,8 @@ public:
 	};
 	// Where this host keeps them: $XDG_RUNTIME_DIR/ghost/smartcard, pcscd
 	// as installed, the driver in lib/ghost/pcsc beside wraith's bin/ (or
-	// where wraith was built to install it). False if any is missing: the
+	// where wraith was built to install it), and /run/pcscd, which pcscd
+	// needs and can't make as the user. False if any is missing: the
 	// session then doesn't offer "smartcard".
 	static bool installed(Paths *paths);
 	// The socket the session's PC/SC programs use (PCSCLITE_CSOCK_NAME).

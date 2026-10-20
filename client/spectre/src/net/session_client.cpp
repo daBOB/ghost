@@ -51,7 +51,7 @@ const std::vector<std::string> kDecoders = {"vulkan", "vaapi", "software"};
 #endif
 
 // SessionHello.client_name: this machine's name without a domain, what the
-// host labels our shared folders with ("Home (saiko-pc01)"). Empty if
+// host labels our shared folders with ("Home (office-pc)"). Empty if
 // there's none to be had.
 std::string machine_name() {
 	std::string name;

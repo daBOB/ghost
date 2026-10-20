@@ -1661,7 +1661,7 @@ shared folders read-only with FUSE under `$XDG_RUNTIME_DIR/ghost/files`
 (`clip/<list_id>/`, `shares/<name>/`), puts paths into it on the
 session's clipboard, gives each shared folder a GTK bookmark and a KDE
 Places entry for the session labelled with the folder's name and
-`SessionHello.client_name` ("Home (saiko-pc01)"), and re-lists a
+`SessionHello.client_name` ("Home (office-pc)"), and re-lists a
 shared folder when its listing is more than 5 s old. It offers neither capability where it
 can't mount (no `/dev/fuse`, `fusermount3` or runtime directory): a
 client that negotiated `file-clipboard` no longer sends its copies as

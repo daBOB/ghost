@@ -101,7 +101,7 @@ message SessionHello {
 
   // Informational.
   repeated string decoders = 12;       // e.g. "vulkan", "vaapi", "software", "d3d11va"
-  string client_name = 13;             // the client machine's name, e.g. "saiko-pc01"
+  string client_name = 13;             // the client machine's name, e.g. "office-pc"
 }
 
 // More a client can decode in one of its `codecs` (gdp-spec.md §7.3).
