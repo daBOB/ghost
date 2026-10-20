@@ -291,6 +291,8 @@ private:
 	// Hands `utf8` to SDL's clipboard. Split out of on_clipboard_text() so
 	// open_window() can run the same steps for text that arrived early.
 	void apply_clipboard_text(const std::string &utf8);
+	// Applies the host's clipboard held for clipboard_ready_, if it is.
+	void flush_pending_clipboard();
 	// Decoder callback (fired synchronously from decoder_.decode()).
 	void on_decoded_frame(AVFrame *frame);
 	// Presents the newest picture on_decoded_frame() held back, if any.
@@ -596,6 +598,14 @@ private:
 	// belongs to the video subsystem, so text that arrives before
 	// open_window()'s SDL_Init waits here rather than being dropped.
 	std::optional<std::string> pending_clipboard_;
+	// Whether SDL can set the clipboard yet. On Wayland it needs the
+	// serial of an input event in its window (a key, a click, a touch),
+	// and SDL 3.4.2 never sets a selection made before the first one: it
+	// holds it back, then reads it as its own, empty, ever after, so every
+	// later copy here reads as "" and none reaches the host. The host's
+	// clipboard waits in pending_clipboard_ / pending_files_offer_ until
+	// the first such event (flush_pending_clipboard()).
+	bool clipboard_ready_ = false;
 	// The host's copied files, as paths into host_files_' mount, waiting
 	// for SDL the same way; and what the local clipboard offers while they
 	// are on it.

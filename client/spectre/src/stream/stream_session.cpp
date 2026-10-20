@@ -457,14 +457,8 @@ bool StreamSession::open_window() {
 		return false;
 	}
 	sdl_initialized_ = true;
-	if (pending_clipboard_) {
-		apply_clipboard_text(*pending_clipboard_);
-		pending_clipboard_.reset();
-	}
-	if (pending_files_offer_) {
-		offer_files_on_clipboard(*pending_files_offer_);
-		pending_files_offer_.reset();
-	}
+	clipboard_ready_ = std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") != 0;
+	flush_pending_clipboard();
 
 	// Whose session on which host, for the window title and the menu's
 	// title line. A host may send neither (gdp-spec.md §6.5), in which case
@@ -1120,11 +1114,25 @@ void StreamSession::on_clipboard_text(const std::string &utf8) {
 	// wraith pushes its clipboard as soon as the session is accepted, which
 	// can arrive before open_window() has brought SDL up -- and SDL's
 	// clipboard is part of the video subsystem. Hold it rather than lose it.
-	if (!sdl_initialized_) {
+	if (!sdl_initialized_ || !clipboard_ready_) {
 		pending_clipboard_ = utf8;
 		return;
 	}
 	apply_clipboard_text(utf8);
+}
+
+void StreamSession::flush_pending_clipboard() {
+	if (!clipboard_ready_) {
+		return;
+	}
+	if (pending_clipboard_) {
+		apply_clipboard_text(*pending_clipboard_);
+		pending_clipboard_.reset();
+	}
+	if (pending_files_offer_) {
+		offer_files_on_clipboard(*pending_files_offer_);
+		pending_files_offer_.reset();
+	}
 }
 
 void StreamSession::apply_clipboard_text(const std::string &utf8) {
@@ -1152,6 +1160,13 @@ void StreamSession::note_gamepad_activity() {
 }
 
 void StreamSession::handle_event(const SDL_Event &event) {
+	// SDL has the serial it sets the clipboard with once its window has
+	// had a key, a click or a touch (clipboard_ready_).
+	if (!clipboard_ready_ && (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+								 event.type == SDL_EVENT_FINGER_DOWN)) {
+		clipboard_ready_ = true;
+		flush_pending_clipboard();
+	}
 	switch (event.type) {
 	case SDL_EVENT_QUIT: running_ = false; break;
 	case SDL_EVENT_WINDOW_RESIZED: presenter_.notify_resized(); break;
@@ -2027,7 +2042,7 @@ void StreamSession::on_host_file_list(const gdp::session::FileList &list) {
 		pending_files_offer_.reset();
 		return;
 	}
-	if (!sdl_initialized_) {
+	if (!sdl_initialized_ || !clipboard_ready_) {
 		pending_files_offer_ = paths;
 		return;
 	}
