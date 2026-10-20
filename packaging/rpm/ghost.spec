@@ -70,6 +70,7 @@ BuildRequires:  vulkan-headers
 BuildRequires:  glslang
 BuildRequires:  qt6-qtbase-devel
 BuildRequires:  pam-devel
+BuildRequires:  pcsc-lite-devel
 
 %description
 Ghost is a remote desktop for Linux hosts: ghostd logs clients in and
@@ -89,6 +90,7 @@ Recommends:     foot
 Recommends:     fuse3
 Recommends:     labwc
 Recommends:     mesa-dri-drivers
+Recommends:     pcsc-lite
 Recommends:     pipewire
 Recommends:     xorg-x11-server-Xwayland
 
@@ -137,6 +139,7 @@ Requires:       hicolor-icon-theme
 Recommends:     fuse3
 Recommends:     mesa-dri-drivers
 Recommends:     mesa-vulkan-drivers
+Recommends:     pcsc-lite
 
 %description -n spectre
 spectre is the GDP client: it connects to a Ghost host, decodes the video
@@ -412,6 +415,7 @@ fi
 %dir %{_prefix}/lib/ghost
 %{_prefix}/lib/ghost/ghostlogin
 %{_prefix}/lib/ghost/ghostseat
+%{_prefix}/lib/ghost/pcsc/
 %{_prefix}/lib/ghost/sessions/
 %{_unitdir}/ghostd.service
 %{_unitdir}/ghostseat.socket

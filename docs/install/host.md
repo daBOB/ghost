@@ -111,6 +111,20 @@ session you already hold an unused redirect token and fingerprint for.
   programs aren't all present isn't listed.
   Override or hide one with a same-named file in `/etc/ghost/sessions.d`
   ([session profiles](../reference/session-profiles.md)).
+- **Smart cards.** Forwarding a client's smart card readers needs
+  `pcscd` installed (`apt install pcscd`); wraith runs one for each
+  session, as its user, seeing only that client's readers, and points the
+  desktop's programs at it. The host's own readers are never shown in a
+  session. GnuPG on the host reaches cards through its own USB driver by
+  default, which can't see forwarded ones; to use them, put these lines
+  in `~/.gnupg/scdaemon.conf` and run `gpgconf --kill gpg-agent` (a
+  gpg-agent started before the session doesn't know the session's
+  pcscd):
+
+  ```
+  disable-ccid
+  pcsc-shared
+  ```
 
 ## Power management
 

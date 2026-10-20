@@ -245,14 +245,39 @@
           </widget>
          </item>
          <item>
+          <widget class="QCheckBox" name="smartcardCheck">
+           <property name="text">
+            <string>Forward smart cards</string>
+           </property>
+           <property name="toolTip">
+            <string>Let the session's programs use smart cards (PIV and OpenPGP, a YubiKey's
+   smart card side) in readers plugged into this machine: signing in, signing, decrypting.
+   Writing to a card asks you first. Takes effect on the next connection; the host must
+   support it.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="unknownCardsCheck">
+           <property name="text">
+            <string>Pass other smart cards unfiltered</string>
+           </property>
+           <property name="toolTip">
+            <string>Also forward cards and applications spectre can't read (a national ID card, a
+   CAC), writes and all, without asking. A YubiKey's other applications stay refused.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QCheckBox" name="keyMaintenanceCheck">
            <property name="text">
-            <string>Refuse security key maintenance</string>
+            <string>Refuse security key and smart card maintenance</string>
            </property>
            <property name="toolTip">
             <string>Refuse the host's requests to reset a forwarded key, change its PIN, manage its
-   passkeys or fingerprints, or change its settings, without asking. Unticked, spectre
-   asks you about each one, and the key gets it only if you allow it.</string>
+   passkeys or fingerprints, or change its settings, and to write to a forwarded smart
+   card (new keys, certificates, PIN changes), without asking. Unticked, spectre asks you
+   about each one, and the device gets it only if you allow it.</string>
            </property>
           </widget>
          </item>

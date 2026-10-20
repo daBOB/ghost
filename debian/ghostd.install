@@ -2,6 +2,7 @@ usr/bin/ghostd
 usr/bin/wraith
 usr/lib/ghost/ghostlogin
 usr/lib/ghost/ghostseat
+usr/lib/ghost/pcsc
 usr/lib/ghost/sessions
 usr/lib/systemd/system/ghostd.service
 usr/lib/systemd/system/ghostseat.socket

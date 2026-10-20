@@ -66,10 +66,14 @@ pub struct Profile {
     /// Off by default: a forwarded key signs whatever the session asks,
     /// once the user touches it.
     pub forward_security_keys: bool,
-    /// With forward_security_keys: refuse a key's maintenance (reset, PIN
-    /// changes, passkey management) outright (spectre -u). Off by default:
-    /// spectre asks the user about each request instead.
+    /// With forward_security_keys or forward_smartcards: refuse a key's
+    /// maintenance (reset, PIN changes, passkey management) and a card's
+    /// writes outright (spectre -u). Off by default: spectre asks the user
+    /// about each request instead.
     pub refuse_key_maintenance: bool,
+    /// Forward the client's smart card readers (spectre -Y). Off by
+    /// default: the session can sign with a card whose PIN it is given.
+    pub forward_smartcards: bool,
     /// Send the client's microphone to the host (spectre -M).
     pub microphone: bool,
     /// Run spectre with SPECTRE_LOG=debug.
@@ -99,6 +103,7 @@ impl Default for Profile {
             forward_gamepads: true,
             forward_security_keys: false,
             refuse_key_maintenance: false,
+            forward_smartcards: false,
             microphone: false,
             debug_logging: false,
             display_sleep_minutes: 20,
@@ -164,6 +169,7 @@ impl Profile {
             forward_gamepads: self.forward_gamepads,
             forward_security_keys: self.forward_security_keys,
             refuse_key_maintenance: self.refuse_key_maintenance,
+            forward_smartcards: self.forward_smartcards,
             microphone: self.microphone,
             debug_logging: self.debug_logging,
             display_sleep_minutes: self.display_sleep_minutes,

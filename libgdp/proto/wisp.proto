@@ -136,7 +136,12 @@ message ClientProfile {
   // (spectre -U, gdp-spec.md §8.7).
   bool forward_security_keys = 13;
 
-  // With forward_security_keys: refuse a key's maintenance outright
-  // (spectre -u) rather than asking the user (gdp-spec.md §8.7).
+  // With forward_security_keys or forward_smartcards: refuse a key's
+  // maintenance and a card's writes outright (spectre -u) rather than
+  // asking the user (gdp-spec.md §8.7, §8.8).
   bool refuse_key_maintenance = 14;
+
+  // Forward the client's smart card readers to the host (spectre -Y,
+  // gdp-spec.md §8.8). refuse_key_maintenance refuses their writes too.
+  bool forward_smartcards = 15;
 }

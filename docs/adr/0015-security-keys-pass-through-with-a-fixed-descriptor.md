@@ -71,8 +71,8 @@ CTAP2 requests that need a touch carry the relying party's ID in clear.
   security-key settings page in the session therefore fails on a
   forwarded key; the key is managed on the client's own machine.
 - Only the FIDO interface goes through. A YubiKey's OTP keyboard and its
-  CCID smartcard (PIV, OpenPGP) don't; smartcards would need PC/SC
-  forwarding, a separate decision.
+  CCID smartcard (PIV, OpenPGP) don't; smartcards forward over PC/SC,
+  separately ([0017](0017-smart-cards-forward-over-pcsc.md)).
 - Clients on Linux (Wisp included) and macOS can forward keys as they
   are. Windows (since 10 1903) lets only elevated processes open FIDO
   HID devices, so spectre there needs a helper: a service the installer

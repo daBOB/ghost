@@ -945,6 +945,7 @@ capability is still right.
 | `file-clipboard` | defined | §7.12; only with `file` and `clipboard` |
 | `file-share` | defined | §7.12; only with `file` |
 | `security-key` | defined | §8.7 |
+| `smartcard` | defined | §8.8 |
 | `usb` | reserved | an additional stream kind (§2.2) |
 
 Anything that changes the meaning of bytes an existing peer already
@@ -1697,6 +1698,12 @@ message InputEnvelope {
     SecurityKeyConnect security_key_connect = 14;
     SecurityKeyDisconnect security_key_disconnect = 15;
     SecurityKeyInput security_key_input = 16;
+    SmartcardReaderAdded smartcard_reader_added = 17;
+    SmartcardReaderRemoved smartcard_reader_removed = 18;
+    SmartcardCardInserted smartcard_card_inserted = 19;
+    SmartcardCardRemoved smartcard_card_removed = 20;
+    SmartcardPowered smartcard_powered = 21;
+    SmartcardResponse smartcard_response = 22;
   }
 }
 ```
@@ -1776,9 +1783,9 @@ ignores it; the reference session agent does.
 
 ### 8.4 Host to client
 
-Under the capabilities `hid` (§8.6) and `security-key` (§8.7), the host
-sends toward the client on the input stream, one `HostInputEnvelope` per
-frame:
+Under the capabilities `hid` (§8.6), `security-key` (§8.7) and
+`smartcard` (§8.8), the host sends toward the client on the input
+stream, one `HostInputEnvelope` per frame:
 
 ```protobuf
 message HostInputEnvelope {
@@ -1789,11 +1796,14 @@ message HostInputEnvelope {
     HidSetReport hid_set_report = 4;
     SecurityKeyRejected security_key_rejected = 5;
     SecurityKeyOutput security_key_output = 6;
+    SmartcardRejected smartcard_rejected = 7;
+    SmartcardPower smartcard_power = 8;
+    SmartcardTransmit smartcard_transmit = 9;
   }
 }
 ```
 
-Without either the host sends nothing on the input stream, and a client
+Without any of them the host sends nothing on the input stream, and a client
 MUST ignore anything it receives there.
 
 ### 8.5 Gamepads
@@ -2105,6 +2115,145 @@ C0         End Collection
 `hid-generic` binds to it and creates a `hidraw` node, which the
 session's FIDO clients find by its usage page; the host fails any
 GET_REPORT or SET_REPORT itself, since CTAPHID uses neither.
+
+### 8.8 Smart cards
+
+Only with `smartcard` in effect; a host MUST ignore the messages below
+otherwise, and a client MUST NOT send them.
+
+A client may forward the PC/SC smart card readers at its end, so that
+the session's own PC/SC programs (OpenSC's PKCS#11 module, a browser
+signing in with a certificate, GnuPG, `ykman`) can use their cards as
+cards in readers on the host: a PIV card, an OpenPGP card, a YubiKey's
+CCID interface. The host presents a reader for each, and relays the
+card's power and command APDUs to the client and the card's responses
+back; the card's state, and its presence, are the client's to report.
+Unlike a security key, the client reads every command
+([ADR 0017](../adr/0017-smart-cards-forward-over-pcsc.md)).
+
+A client forwards a reader only if its user chose to forward smart
+cards, and SHOULD let them see which readers are forwarded. It forwards
+up to 2 readers, each in a slot `reader_index`, 0 or 1; a host MUST
+ignore a message whose `reader_index` is 2 or more. A client MUST NOT
+forward a reader the host presents to it (a client inside a session
+would otherwise hand the session's readers back to it); the reference
+host's reader names end in ` (ghost)`.
+
+**`SmartcardReaderAdded`:** a reader appeared in the slot. One for an
+occupied slot replaces its reader.
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `reader_index` | uint32 | The slot. |
+| 2 | `name` | string | The reader's PC/SC name. At most 128 bytes. |
+| 3 | `card_present` | bool | A card is in it. |
+| 4 | `atr` | bytes | The card's ATR, when present. At most 33 bytes. |
+
+The host SHOULD give its reader the client's name, as some programs know
+a device by its reader's name (`ykman` a YubiKey).
+
+**`SmartcardReaderRemoved`** (field `reader_index` 1): the reader went
+away or is no longer forwarded. **`SmartcardCardInserted`** (fields
+`reader_index` 1; `atr` 2, bytes) and **`SmartcardCardRemoved`** (field
+`reader_index` 1): a card went in or came out. The host answers itself,
+from these, every question about whether a card is present: none crosses
+the network.
+
+**`SmartcardRejected`** (host → client; fields `reader_index` 1, uint32;
+`reason` 2, string): the host will not, or could not, present the
+reader, and the slot is empty again. `reason` is for logs.
+
+**`SmartcardPower`** (host → client):
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `reader_index` | uint32 | The slot. |
+| 2 | `sequence` | uint32 | Chosen by the host; the answer repeats it. |
+| 3 | `action` | `SmartcardPowerAction` | 1 `UP`: power the card up (a powered card is reset). 2 `DOWN`. 3 `RESET`: a warm reset. |
+
+**`SmartcardPowered`** answers it, once:
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `reader_index` | uint32 | The slot. |
+| 2 | `sequence` | uint32 | The request's. |
+| 3 | `error` | `SmartcardError` | 0 `NONE`; 1 `NO_CARD` (none in the reader, or removed); 2 `BUSY` (a program at the client holds the card); 3 `FAILED`. |
+| 4 | `atr` | bytes | After `UP` or `RESET` without an error: the card's ATR. |
+
+**`SmartcardTransmit`** (host → client; fields `reader_index` 1;
+`sequence` 2; `apdu` 3, bytes, 4 to 65 544): one command APDU for the
+powered card. The host sends at most one per reader at a time, and waits
+for its answer however long it takes: a card may wait for a touch, and a
+client for its user. **`SmartcardResponse`** answers it, once (fields
+`reader_index` 1; `sequence` 2; `error` 3, `SmartcardError`; `response`
+4, bytes, 2 to 65 538, the status word last). An answer whose `sequence`
+isn't the outstanding request's is ignored; whatever is outstanding when
+the card or reader goes is failed by the host, which ignores the client's
+answer when it comes.
+
+While the host has a card powered, the session's commands carry state
+from one to the next (the applet selected, a PIN verified), and another
+program's commands in between would derail them. A client opens the card
+exclusively if it can. If another program at its end holds the card, it
+MAY share it, but then MUST keep other programs off it from each of the
+host's commands to the next, as a PC/SC transaction does, and MUST put
+the card back where its policy (below) believes it is before passing a
+command after letting others in. Powering the card down, or the slot
+ending, resets it, so that nothing verified for the session outlives it.
+
+A forwarded card signs, decrypts and authenticates freely, and is
+written only with the client user's consent. The client reads each
+command before passing it on, follows which applet is selected on the
+card, and:
+
+- passes, of the PIV applet (AID `A0 00 00 03 08`, NIST SP 800-73-4):
+  `SELECT`, `GET DATA`, `VERIFY`, `GENERAL AUTHENTICATE`, `GET RESPONSE`,
+  and Yubico's `GET VERSION`, `GET SERIAL`, `GET METADATA` and `ATTEST`;
+  of the OpenPGP applet (`D2 76 00 01 24 01`, OpenPGP card 3.4):
+  `SELECT`, `SELECT DATA`, `GET DATA`, `GET NEXT DATA`, `VERIFY`,
+  `PERFORM SECURITY OPERATION`, `INTERNAL AUTHENTICATE`, `GET CHALLENGE`,
+  `MANAGE SECURITY ENVIRONMENT`, `GENERATE ASYMMETRIC KEY PAIR` reading
+  a public key (P1 `81`), `ACTIVATE FILE`, `GET RESPONSE` and Yubico's
+  `GET VERSION`;
+- MUST NOT pass, unless its user approved that command in a prompt with
+  the rules of §8.7, the PIV applet's `GENERATE ASYMMETRIC KEY PAIR`,
+  `PUT DATA`, `CHANGE REFERENCE DATA`, `RESET RETRY COUNTER` and Yubico's
+  `SET MANAGEMENT KEY`, `IMPORT KEY`, `SET PIN RETRIES`, `MOVE KEY` and
+  `RESET`; or the OpenPGP applet's `GENERATE ASYMMETRIC KEY PAIR` (P1
+  `80`), `PUT DATA` (both instructions), `CHANGE REFERENCE DATA`,
+  `RESET RETRY COUNTER`, `TERMINATE DF` and Yubico's `SET PIN RETRIES`
+  and `GET ATTESTATION`. The first block of a command chain (CLA bit
+  `0x10`) is asked about, and the rest of a chain whose first block the
+  card took pass;
+- refuses everything else: other instructions; a `SELECT` of any other
+  applet, by file, or of the card's default; commands on a logical
+  channel other than 0, `MANAGE CHANNEL`, commands under secure
+  messaging, and classes other than the interindustry ones.
+
+A client answers a refused `SELECT` with status `6A 82` and any other
+refused command with `69 82`, in the card's place, so the program fails
+at once. The prompt waits however long the host would; there are no
+keep-alives to send. A client MAY refuse every write without asking, by
+its user's or administrator's setting, or after its user has turned
+several requests down.
+
+A client MAY, by its user's choice, pass the commands of applets it
+doesn't know unread (a national ID card, a CAC), with read commands of a
+card with nothing selected. Even then it MUST refuse a `SELECT` of
+Yubico's own applets (RID `A0 00 00 05 27`: management, which turns a
+YubiKey's interfaces off; OATH; OTP; HSM Auth), of the FIDO applet (RID
+`A0 00 00 06 47`, whose CTAP would bypass §8.7), and of a
+GlobalPlatform security domain (`A0 00 00 01 51 00 00 00`,
+`A0 00 00 00 03 00 00 00`), or of any prefix of one, as a card may
+select an applet by part of its AID.
+
+*Host behavior:* the reference host runs a PC/SC daemon (pcsc-lite's
+`pcscd`) for the session alone, as its user, with USB scanning turned
+off, and points the session's programs at its socket with
+`PCSCLITE_CSOCK_NAME`. It loads ghost's reader driver for each
+forwarded reader, which relays to wraith over a local socket. pcscd reads
+its readers only as it starts, so the host restarts it when the readers
+change, keeping a reader's name while the same client comes back.
 
 ---
 
@@ -2623,7 +2772,8 @@ setting:
 | 11 | `display_sleep_minutes` | uint32 | Turn the display off after this many minutes without input; 0 never. |
 | 12 | `audio_output` | string | Where sound plays: `display`, `builtin` or `auto`. |
 | 13 | `forward_security_keys` | bool | Offer `security-key` (§8.7) and forward the client's keys. |
-| 14 | `refuse_key_maintenance` | bool | With 13: refuse a forwarded key's maintenance (§8.7) without asking. |
+| 14 | `refuse_key_maintenance` | bool | With 13 or 15: refuse a forwarded key's maintenance (§8.7) and a card's writes (§8.8) without asking. |
+| 15 | `forward_smartcards` | bool | Offer `smartcard` (§8.8) and forward the client's readers. |
 
 Client settings in a profile take effect
 at the next session the client starts, never in a running one;
@@ -2788,6 +2938,7 @@ peer. Receivers MUST bound what they allocate from them: frame lengths
 cursor images (§7.4, 384 pixels a side), clipboard data (§7.9, 1 MiB −
 1 KiB), gamepad slots and arrays (§8.5), HID descriptors and reports
 (§8.6, 4096 bytes), security-key packets and names (§8.7, 64 and 128
+bytes), smart card names, ATRs and APDUs (§8.8, 128, 33 and 65 544
 bytes), a file's opening frame (§7.12, 4096 bytes). A
 `FileOffer.size` says how much is coming, not how much to allocate.
 Gamepad names and `client_id` are for logs only.
@@ -2839,9 +2990,10 @@ thing that grants a request. The origin a signature is bound to is
 whatever the host's browser says it is. A client therefore forwards a
 key only when its user chose to, SHOULD show the relying party each
 request names, so that a touch answers a request the user can see, and
-MUST refuse the key's maintenance commands (§8.7): a session that could
-reset the key, or set its PIN, could destroy or lock away every
-credential on it with one misplaced touch, or none. A
+MUST NOT pass the key's maintenance commands without its user's
+approval of each (§8.7): a session that could reset the key, or set its
+PIN, could destroy or lock away every credential on it with one
+misplaced touch, or none. A
 host MUST NOT let a forwarded key become anything but a FIDO HID
 device: it MUST present a descriptor of its own rather than the
 client's, and MUST check the devices its drivers create, as for raw
@@ -2849,6 +3001,24 @@ controllers. *Host behavior:* the reference host destroys the device if
 any driver but `hid-generic` binds, or if it creates an input device.
 A PIN typed on the host crosses the relay encrypted to the key (CTAP2's
 PIN protocol).
+
+**Smart cards.** `smartcard` (§8.8) gives every process of the session's
+user the client's cards for as long as they are forwarded. Unlike a
+security key, a card asks nothing of its user: it signs and decrypts for
+whoever has its PIN, and a PIN typed in the session, or a PIN the
+session caches, is the session's to use. A PIV or OpenPGP `VERIFY`
+carries the PIN in clear inside the session's encryption, so the session
+agent and every program in the session can see it, as they could with a
+reader on the host; neither end SHOULD log APDU data. A card left with
+its factory management key can have its keys replaced with no PIN at
+all. A client therefore forwards readers only when its user chose to,
+MUST NOT pass a write without its user's approval of that command
+(§8.8), MUST refuse what it can't read, and MUST NOT let the session
+reach a YubiKey's other applets: management could turn the key's
+interfaces off, OATH would give up every code that needs no touch, and
+the FIDO applet would bypass §8.7. Consent doesn't stop a session that
+talks its user into approving; a touch-policy slot, where the card has
+one, adds a physical check to each use.
 
 The reference
 implementation fuzzes its datagram, refinement-container and control
@@ -2892,6 +3062,8 @@ either side to the other; a client SHOULD let its user turn it off.
 | HID report descriptor; report | 4096 bytes; 4096 bytes | §8.6 |
 | HID request timeout (reference host) | 5 s | §8.6 |
 | Security-key slots; packet; name | 2; 64 bytes; 128 bytes | §8.7 |
+| Smart card reader slots; name; ATR | 2; 128 bytes; 33 bytes | §8.8 |
+| Smart card command; response APDU | 4 to 65 544 bytes; 2 to 65 538 bytes | §8.8 |
 | Video header | 16 bytes (+1 channel) | §9.1 |
 | Slice payload before the path is known | 1100 bytes | §9.2 |
 | `host_lat` unit; maximum | 10 µs; 0xFFFF | §9.1 |
@@ -2928,6 +3100,7 @@ every implementation listed for it.
 | Mounting the other end's files (FUSE) | `libgdp/include/gdp/remote_files.hpp`, `remote_mount.hpp`; `host/wraith/src/session/client_files.cpp`; `client/spectre/src/net/local_files.cpp` |
 | Gamepad order | `libgdp/include/gdp/gamepad.hpp` |
 | Security keys (§8.7) | `libgdp/include/gdp/security_key.hpp`; `host/ghostseat/src/devices.rs` (the device and its policy); `host/wraith/src/session/security_keys.cpp` (the relay) |
+| Smart cards (§8.8) | `libgdp/include/gdp/smartcard.hpp` (limits, the client's policy); `client/spectre/src/input/smartcard.cpp` (PC/SC at the client); `host/wraith/src/session/smartcards.cpp`, `pcscd.cpp` (the relay, the session's pcscd); `host/ifd-ghost/` (the reader driver) |
 | Session clock | `libgdp/include/gdp/clock.hpp` |
 | Error codes | `libgdp/include/gdp/error_codes.hpp` (pinned by `error_codes_test`); `LobbyErrorCode` in `lobby.proto`; `host/veil/app/session.js` |
 | Fingerprints, CA checks | `libgdp/include/gdp/cert_fingerprint.hpp`; `CaTrust` in `transport.hpp`; `host/veil/src/lobby_tls.rs` (which certificate the broker presents) |

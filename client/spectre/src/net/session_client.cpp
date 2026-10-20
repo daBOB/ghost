@@ -12,6 +12,7 @@
 #include "gdp/negotiation.hpp"
 #include "gdp/refine.hpp"
 #include "gdp/security_key.hpp"
+#include "gdp/smartcard.hpp"
 #include "gdp/version.hpp"
 #include "session.pb.h"
 #include "log.hpp"
@@ -166,6 +167,9 @@ std::vector<std::string> SessionClient::offered_capabilities() const {
 	}
 	if (offer_security_key_) {
 		offered.push_back(gdp::kCapabilitySecurityKey);
+	}
+	if (offer_smartcard_) {
+		offered.push_back(gdp::kCapabilitySmartcard);
 	}
 	if (offer_refine_) {
 		offered.push_back(gdp::kCapabilityRefine);
@@ -457,6 +461,7 @@ bool SessionClient::handle_accept(const gdp::session::ControlEnvelope &env) {
 		std::memory_order_release);
 	security_key_enabled_.store(gdp::has_capability(session.capabilities, gdp::kCapabilitySecurityKey),
 		std::memory_order_release);
+	smartcard_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilitySmartcard);
 	file_enabled_ = gdp::has_capability(session.capabilities, gdp::kCapabilityFile);
 	// Each only with what it builds on (gdp-spec.md §7.12), whatever the host said.
 	file_clipboard_enabled_ = file_enabled_ && clipboard_enabled_ &&
@@ -696,10 +701,33 @@ void SessionClient::send_pointer_axis(double horizontal, double vertical) {
 }
 
 void SessionClient::handle_input_data(const uint8_t *data, size_t len) {
-	// gdp-spec.md §8.4: the host sends here only under "hid" and
-	// "security-key"; anything else is ignored rather than fatal.
+	// gdp-spec.md §8.4: the host sends here only under "hid",
+	// "security-key" and "smartcard"; anything else is ignored rather
+	// than fatal.
 	gdp::session::HostInputEnvelope env;
 	bool ok = input_reader_.feed_and_drain(data, len, &env, [&] {
+		if (smartcard_enabled_) {
+			if (env.has_smartcard_rejected()) {
+				if (on_smartcard_rejected) {
+					on_smartcard_rejected(env.smartcard_rejected().reader_index(), env.smartcard_rejected().reason());
+				}
+				return true;
+			}
+			if (env.has_smartcard_power()) {
+				if (on_smartcard_power) {
+					on_smartcard_power(env.smartcard_power().reader_index(), env.smartcard_power().sequence(),
+						env.smartcard_power().action());
+				}
+				return true;
+			}
+			if (env.has_smartcard_transmit()) {
+				if (on_smartcard_transmit) {
+					on_smartcard_transmit(env.smartcard_transmit().reader_index(),
+						env.smartcard_transmit().sequence(), env.smartcard_transmit().apdu());
+				}
+				return true;
+			}
+		}
 		if (security_keys_enabled()) {
 			if (env.has_security_key_rejected()) {
 				if (on_security_key_rejected) {
@@ -825,6 +853,79 @@ void SessionClient::send_security_key_input(uint32_t key_index, const uint8_t *p
 	auto *in = env.mutable_security_key_input();
 	in->set_key_index(key_index);
 	in->set_data(packet, len);
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_reader_added(uint32_t reader_index, const std::string &name, bool card_present,
+	const std::string &atr) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *added = env.mutable_smartcard_reader_added();
+	added->set_reader_index(reader_index);
+	added->set_name(name.substr(0, gdp::kMaxSmartcardReaderName));
+	added->set_card_present(card_present);
+	if (card_present) {
+		added->set_atr(atr.substr(0, gdp::kMaxAtr));
+	}
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_reader_removed(uint32_t reader_index) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	env.mutable_smartcard_reader_removed()->set_reader_index(reader_index);
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_card_inserted(uint32_t reader_index, const std::string &atr) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *inserted = env.mutable_smartcard_card_inserted();
+	inserted->set_reader_index(reader_index);
+	inserted->set_atr(atr.substr(0, gdp::kMaxAtr));
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_card_removed(uint32_t reader_index) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	env.mutable_smartcard_card_removed()->set_reader_index(reader_index);
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_powered(uint32_t reader_index, uint32_t sequence, int error,
+	const std::string &atr) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *powered = env.mutable_smartcard_powered();
+	powered->set_reader_index(reader_index);
+	powered->set_sequence(sequence);
+	powered->set_error(static_cast<gdp::session::SmartcardError>(error));
+	powered->set_atr(atr.substr(0, gdp::kMaxAtr));
+	send_input(env);
+}
+
+void SessionClient::send_smartcard_response(uint32_t reader_index, uint32_t sequence, int error,
+	const std::string &response) {
+	if (!smartcard_enabled_) {
+		return;
+	}
+	gdp::session::InputEnvelope env = make_input_envelope();
+	auto *r = env.mutable_smartcard_response();
+	r->set_reader_index(reader_index);
+	r->set_sequence(sequence);
+	r->set_error(static_cast<gdp::session::SmartcardError>(error));
+	r->set_response(response);
 	send_input(env);
 }
 

@@ -52,6 +52,8 @@ constexpr auto kKioskKey = "spectre/debug_kiosk";
 constexpr auto kGamepadKey = "spectre/forward_gamepads";
 constexpr auto kSecurityKeyKey = "spectre/forward_security_keys";
 constexpr auto kKeyMaintenanceKey = "spectre/refuse_key_maintenance";
+constexpr auto kSmartcardKey = "spectre/forward_smartcards";
+constexpr auto kUnknownCardsKey = "spectre/pass_unknown_cards";
 constexpr auto kMicrophoneKey = "spectre/microphone";
 constexpr auto kPyrowaveKey = "spectre/allow_pyrowave";
 constexpr auto kFollowWindowKey = "spectre/follow_window";
@@ -82,6 +84,8 @@ SpectreSettings load_settings() {
 	settings.forward_gamepads = store.value(kGamepadKey, true).toBool();
 	settings.forward_security_keys = store.value(kSecurityKeyKey, false).toBool();
 	settings.refuse_key_maintenance = store.value(kKeyMaintenanceKey, false).toBool();
+	settings.forward_smartcards = store.value(kSmartcardKey, false).toBool();
+	settings.pass_unknown_cards = store.value(kUnknownCardsKey, false).toBool();
 	settings.microphone = store.value(kMicrophoneKey, false).toBool();
 	settings.allow_pyrowave = store.value(kPyrowaveKey, true).toBool();
 	settings.follow_window = store.value(kFollowWindowKey, false).toBool();
@@ -105,6 +109,8 @@ void save_settings(const SpectreSettings &settings) {
 	store.setValue(kGamepadKey, settings.forward_gamepads);
 	store.setValue(kSecurityKeyKey, settings.forward_security_keys);
 	store.setValue(kKeyMaintenanceKey, settings.refuse_key_maintenance);
+	store.setValue(kSmartcardKey, settings.forward_smartcards);
+	store.setValue(kUnknownCardsKey, settings.pass_unknown_cards);
 	store.setValue(kMicrophoneKey, settings.microphone);
 	store.setValue(kPyrowaveKey, settings.allow_pyrowave);
 	store.setValue(kFollowWindowKey, settings.follow_window);
@@ -188,12 +194,16 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 	ui->gamepadCheck->setChecked(settings.forward_gamepads);
 	ui->securityKeyCheck->setChecked(settings.forward_security_keys);
 	ui->keyMaintenanceCheck->setChecked(settings.refuse_key_maintenance);
-	// Only means something for keys that are forwarded.
-	auto update_key_maintenance_enabled = [this]() {
-		ui->keyMaintenanceCheck->setEnabled(ui->securityKeyCheck->isChecked());
+	ui->smartcardCheck->setChecked(settings.forward_smartcards);
+	ui->unknownCardsCheck->setChecked(settings.pass_unknown_cards);
+	// Only mean something for devices that are forwarded.
+	auto update_device_checks = [this]() {
+		ui->keyMaintenanceCheck->setEnabled(ui->securityKeyCheck->isChecked() || ui->smartcardCheck->isChecked());
+		ui->unknownCardsCheck->setEnabled(ui->smartcardCheck->isChecked());
 	};
-	update_key_maintenance_enabled();
-	connect(ui->securityKeyCheck, &QCheckBox::toggled, this, update_key_maintenance_enabled);
+	update_device_checks();
+	connect(ui->securityKeyCheck, &QCheckBox::toggled, this, update_device_checks);
+	connect(ui->smartcardCheck, &QCheckBox::toggled, this, update_device_checks);
 	ui->microphoneCheck->setChecked(settings.microphone);
 	ui->pyrowaveCheck->setChecked(settings.allow_pyrowave);
 	ui->losslessCheck->setChecked(settings.lossless_refinement);
@@ -280,6 +290,8 @@ SpectreSettings SettingsDialog::settings() const {
 	settings.forward_gamepads = ui->gamepadCheck->isChecked();
 	settings.forward_security_keys = ui->securityKeyCheck->isChecked();
 	settings.refuse_key_maintenance = ui->keyMaintenanceCheck->isChecked();
+	settings.forward_smartcards = ui->smartcardCheck->isChecked();
+	settings.pass_unknown_cards = ui->unknownCardsCheck->isChecked();
 	settings.microphone = ui->microphoneCheck->isChecked();
 	settings.allow_pyrowave = ui->pyrowaveCheck->isChecked();
 	settings.lossless_refinement = ui->losslessCheck->isChecked();

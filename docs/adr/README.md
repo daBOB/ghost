@@ -36,3 +36,4 @@ Status: Accepted (YYYY-MM-DD) | Superseded by NNNN
 | [0014](0014-controllers-pass-through-as-raw-hid.md) | Controllers pass through as raw HID; the Xbox pad is the fallback |
 | [0015](0015-security-keys-pass-through-with-a-fixed-descriptor.md) | Security keys pass through as FIDO HID, with the host's own descriptor |
 | [0016](0016-key-maintenance-by-consent.md) | A forwarded key's maintenance passes with its user's consent |
+| [0017](0017-smart-cards-forward-over-pcsc.md) | Smart cards forward over PC/SC, with writes by consent |

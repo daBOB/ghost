@@ -398,9 +398,15 @@ fn sections() -> Vec<Section> {
                     Kind::Flag,
                 ),
                 field(
+                    "forward_smartcards",
+                    "Forward smart cards",
+                    "Let the session's programs use smart cards (PIV and OpenPGP, a YubiKey's smart card side) in readers plugged into the client, if the host supports it: signing in, signing, decrypting. Writing to a card asks the client's user first. Off by default.",
+                    Kind::Flag,
+                ),
+                field(
                     "refuse_key_maintenance",
-                    "Refuse security key maintenance",
-                    "With security keys forwarded: refuse the host's requests to reset a key, change its PIN, manage its passkeys or fingerprints, or change its settings, without asking. Off, the client asks its user about each one, and the key gets it only if they allow it.",
+                    "Refuse security key and smart card maintenance",
+                    "With security keys or smart cards forwarded: refuse the host's requests to reset a key, change its PIN, manage its passkeys or fingerprints, or change its settings, and to write to a card (new keys, certificates, PIN changes), without asking. Off, the client asks its user about each one, and the device gets it only if they allow it.",
                     Kind::Flag,
                 ),
                 field(

@@ -24,6 +24,7 @@
 #include "session/gamepad_devices.hpp"
 #include "session/raw_controllers.hpp"
 #include "session/security_keys.hpp"
+#include "session/smartcards.hpp"
 #include "session/path_rate_estimator.hpp"
 #include "session/rate_controller.hpp"
 #include "session/session_host.hpp"
@@ -80,6 +81,10 @@ public:
 	GdpSession(SessionHost &host, TokenValidator token_validator, const std::string &control_socket = "",
 		bool gamepads = false, bool raw_controllers = false);
 	~GdpSession();
+
+	// The socket the session's PC/SC programs use, or empty on a host that
+	// can't present smart cards: the desktop's PCSCLITE_CSOCK_NAME.
+	std::string smartcard_socket() const;
 
 	// `*address_in_use`: see gdp::Transport::listen().
 	bool listen(uint16_t port, const std::string &cert_file, const std::string &key_file,
@@ -282,6 +287,9 @@ private:
 	// Security keys (gdp-spec.md §8.7): "security-key" in effect and uhid
 	// on this host.
 	bool security_keys_negotiated() const;
+	// Smart cards (gdp-spec.md §8.8): "smartcard" in effect, and pcscd and
+	// ghost's reader driver on this host.
+	bool smartcards_negotiated() const;
 	// Toward the client on the input stream; dropped without a viewer.
 	void send_host_input(const gdp::session::HostInputEnvelope &env);
 
@@ -386,6 +394,9 @@ private:
 	// The client's forwarded security keys, on a host with uhid; per-client
 	// like the controllers.
 	std::unique_ptr<SecurityKeys> keys_;
+	// The client's forwarded smart card readers, and the session's own
+	// pcscd; on any host with both installed, ghostd or not.
+	std::unique_ptr<Smartcards> cards_;
 	// The -G socket, for ViewerAttached/ViewerDetached; empty under -l.
 	std::string control_socket_;
 	uint32_t next_frame_id_ = 0;

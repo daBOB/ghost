@@ -78,6 +78,17 @@ Limitations section.
   CANCEL withdrawing one, and a bio key (YubiKey Bio) for enrolment.
   The Wisp agent's and greeter's `refuse_key_maintenance` lines aren't
   built outside the Wisp image.
+- Smart cards (gdp-spec.md §8.8, ADR 0017) are tested end to end on one
+  Linux machine only, over loopback, with a YubiKey 5C NFC shared with a
+  Chromium-based app (so in shared mode): `ykman piv info`, OpenSC's
+  `pkcs11-tool -L`/`-O`, a slot 9E signature verified against its
+  certificate, a `PUT DATA` refused by `-u` and one whose prompt timed
+  out. Untested: exclusive mode, a PIN-protected signature through
+  Firefox or `ssh -I`, GnuPG through scdaemon, an approved write, card
+  and reader removal mid-session, two readers, extended APDUs against a
+  real card, T=0 cards, a client on another machine or through Veil's
+  gateway, macOS's PCSC.framework and Windows' WinSCard (neither
+  compiled), and the Wisp image's pcscd.
 - Security keys on Windows: spectre can't open a FIDO HID device without
   elevation (Windows 10 1903 on). Plan (ADR 0015): a helper service the
   installer adds, as LocalSystem, that opens the keys and relays their

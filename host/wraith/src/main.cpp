@@ -10,6 +10,7 @@
 #include "session/report_server.hpp"
 #include "session/session_cert.hpp"
 #include "session/session_profile.hpp"
+#include "session/smartcards.hpp"
 #include "session/token.hpp"
 #include "util/config.hpp"
 #include "util/log.hpp"
@@ -34,6 +35,9 @@
 // protocol wraith already links.
 static int run_session_ended_mode(const char *socket_path) {
 	wraith::Log::init(wraith::LogLevel::Error);
+	// However wraith stopped, the user manager stops pointing PC/SC
+	// programs at the session's pcscd (session/smartcards.hpp).
+	wraith::Smartcards::withdraw_environment();
 
 	wraith::SeatClient client;
 	std::string error;
@@ -403,6 +407,11 @@ int main(int argc, char *argv[]) {
 	spec.logout_command = profile.logout_exec;
 	spec.env = profile.environment;
 	spec.env.emplace_back("GHOST_SESSION_TYPE", session_type);
+	// The session's PC/SC programs talk to its own pcscd, which sees only
+	// the client's forwarded readers (session/smartcards.hpp).
+	if (session.gdp_session() && !session.gdp_session()->smartcard_socket().empty()) {
+		spec.env.emplace_back("PCSCLITE_CSOCK_NAME", session.gdp_session()->smartcard_socket());
+	}
 
 	// Everything that can still fail -- forking the session leader, the
 	// capture and input bring-up -- happens in start(), so ghostd hears

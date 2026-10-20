@@ -204,6 +204,15 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 			relay_security_key_packet(i, packet);
 		}
 	};
+	// Smart cards (gdp-spec.md §8.8): the host's requests go through the
+	// card's policy to the PC/SC worker.
+	client_.on_smartcard_rejected = [this](uint32_t i, const std::string &reason) { on_smartcard_rejected(i, reason); };
+	client_.on_smartcard_power = [this](uint32_t i, uint32_t sequence, int action) {
+		on_smartcard_power(i, sequence, action);
+	};
+	client_.on_smartcard_transmit = [this](uint32_t i, uint32_t sequence, const std::string &apdu) {
+		on_smartcard_transmit(i, sequence, apdu);
+	};
 	decoder_.on_frame = [this](AVFrame *frame) { on_decoded_frame(frame); };
 }
 
@@ -408,6 +417,7 @@ bool StreamSession::connect_and_wait_for_accept() {
 	// to raw later, but a capability can't be added after SessionAccept.
 	client_.set_raw_controllers(true);
 	client_.set_security_keys(options_.forward_security_keys);
+	client_.set_smartcards(options_.forward_smartcards);
 	client_.set_microphone(options_.microphone);
 	client_.set_file_share(!options_.shared_folders.empty() || options_.share_my_files);
 	if (!client_.connect(options_.host, options_.port, options_.token, options_.cert_sha256)) {
@@ -652,7 +662,8 @@ void StreamSession::main_loop() {
 #endif
 
 		wait_for_notify(client_.notify_fd(), 4,
-			{host_files_.running() ? host_files_.notify_fd() : -1, local_files_.notify_fd()});
+			{host_files_.running() ? host_files_.notify_fd() : -1, local_files_.notify_fd(),
+				card_readers_ ? card_readers_->notify_fd() : -1});
 		client_.dispatch();
 		host_files_.dispatch();
 		local_files_.dispatch();
@@ -715,6 +726,17 @@ void StreamSession::main_loop() {
 					}
 				}
 			}
+		}
+		if (client_.smartcards_enabled()) {
+			if (!card_readers_) {
+				card_readers_ = std::make_unique<SmartcardReaders>();
+				if (!card_readers_->start()) {
+					// Nothing will come of it; keep the empty one so it isn't
+					// started again every pass.
+					SLOG_INFO("spectre: smartcard: not forwarding readers");
+				}
+			}
+			handle_smartcard_events();
 		}
 		if (client_.security_keys_enabled() && now_us >= next_key_check_us_) {
 			// Cheap: SDL keeps the count from its own hotplug watch.
@@ -1655,6 +1677,207 @@ void StreamSession::on_security_key_rejected(uint32_t i, const std::string &reas
 	withdraw_key_prompts(i);
 	keys_[i].reset();
 	notify(NoticeLevel::kWarning, "The host refused " + name, 5000000);
+	mark_ui_dirty();
+}
+
+int StreamSession::card_slot(const std::string &reader) const {
+	for (uint32_t i = 0; i < gdp::kMaxSmartcardReaders; i++) {
+		if (card_slots_[i].reader == reader) {
+			return static_cast<int>(i);
+		}
+	}
+	return -1;
+}
+
+void StreamSession::handle_smartcard_events() {
+	constexpr uint64_t kToastUs = 4000000;
+	for (SmartcardReaders::Event &e : card_readers_->take_events()) {
+		const int slot = card_slot(e.reader);
+		switch (e.kind) {
+		case SmartcardReaders::Event::kReaderAdded: {
+			if (slot >= 0 || refused_readers_.count(e.reader)) {
+				break;
+			}
+			uint32_t i = 0;
+			while (i < gdp::kMaxSmartcardReaders && !card_slots_[i].reader.empty()) {
+				i++;
+			}
+			if (i == gdp::kMaxSmartcardReaders) {
+				SLOG_INFO("spectre: smartcard: \"%s\": both slots in use, not forwarded", e.reader.c_str());
+				refused_readers_.insert(e.reader);
+				break;
+			}
+			card_slots_[i].reader = e.reader;
+			card_slots_[i].policy = gdp::CardPolicy(!options_.refuse_key_maintenance, options_.pass_unknown_cards);
+			card_slots_[i].prompt = 0;
+			client_.send_smartcard_reader_added(i, e.reader, e.card, e.atr);
+			SLOG_INFO("spectre: smartcard: reader \"%s\" forwarded as slot %u%s", e.reader.c_str(), i,
+				e.card ? ", with a card" : "");
+			notify(NoticeLevel::kInfo, "Smart card reader forwarded: " + gdp::plain_reader_name(e.reader), kToastUs);
+			mark_ui_dirty();
+			break;
+		}
+		case SmartcardReaders::Event::kReaderRemoved:
+			refused_readers_.erase(e.reader);
+			if (slot >= 0) {
+				SLOG_INFO("spectre: smartcard: reader \"%s\" (slot %d) unplugged", e.reader.c_str(), slot);
+				end_card_slot(static_cast<uint32_t>(slot));
+				client_.send_smartcard_reader_removed(static_cast<uint32_t>(slot));
+			}
+			break;
+		case SmartcardReaders::Event::kCardInserted:
+			if (slot >= 0) {
+				card_slots_[slot].policy.reset();
+				client_.send_smartcard_card_inserted(static_cast<uint32_t>(slot), e.atr);
+			}
+			break;
+		case SmartcardReaders::Event::kCardRemoved:
+			if (slot >= 0) {
+				// The host answers what it had waiting on the card itself.
+				if (card_slots_[slot].prompt) {
+					notices_.cancel(card_slots_[slot].prompt);
+					prompt_handlers_.erase(card_slots_[slot].prompt);
+					card_slots_[slot].prompt = 0;
+					sync_prompt_mode();
+					mark_ui_dirty();
+				}
+				card_slots_[slot].policy.reset();
+				card_readers_->release(e.reader);
+				client_.send_smartcard_card_removed(static_cast<uint32_t>(slot));
+			}
+			break;
+		case SmartcardReaders::Event::kPowered:
+			if (slot >= 0) {
+				if (e.error == gdp::session::SMARTCARD_ERROR_BUSY) {
+					notify(NoticeLevel::kWarning, "Another program here is using " + gdp::plain_reader_name(e.reader),
+						10000000, "card-busy",
+						"Close it to use the card in the session. For GnuPG, run: gpgconf --kill scdaemon");
+					mark_ui_dirty();
+				}
+				client_.send_smartcard_powered(static_cast<uint32_t>(slot), e.sequence, e.error, e.atr);
+			}
+			break;
+		case SmartcardReaders::Event::kResponse:
+			if (slot >= 0) {
+				if (e.reselect_failed) {
+					card_slots_[slot].policy.reset();
+				} else if (e.error == gdp::session::SMARTCARD_ERROR_NONE) {
+					card_slots_[slot].policy.transmitted(reinterpret_cast<const uint8_t *>(e.apdu.data()),
+						e.apdu.size(), reinterpret_cast<const uint8_t *>(e.response.data()), e.response.size());
+				}
+				client_.send_smartcard_response(static_cast<uint32_t>(slot), e.sequence, e.error, e.response);
+			}
+			break;
+		}
+	}
+}
+
+void StreamSession::on_smartcard_power(uint32_t i, uint32_t sequence, int action) {
+	if (i >= gdp::kMaxSmartcardReaders || card_slots_[i].reader.empty() || !card_readers_) {
+		client_.send_smartcard_powered(i, sequence, gdp::session::SMARTCARD_ERROR_NO_CARD, "");
+		return;
+	}
+	// Whatever was selected, whatever chain was under way, ends here.
+	card_slots_[i].policy.reset();
+	card_readers_->power(card_slots_[i].reader, sequence, action);
+}
+
+void StreamSession::on_smartcard_transmit(uint32_t i, uint32_t sequence, const std::string &apdu) {
+	// Long enough to read; the next refusal replaces it.
+	constexpr uint64_t kToastUs = 10000000;
+	if (i >= gdp::kMaxSmartcardReaders || card_slots_[i].reader.empty() || !card_readers_) {
+		client_.send_smartcard_response(i, sequence, gdp::session::SMARTCARD_ERROR_NO_CARD, "");
+		return;
+	}
+	CardSlot &slot = card_slots_[i];
+	gdp::CardVerdict v = slot.policy.check(reinterpret_cast<const uint8_t *>(apdu.data()), apdu.size());
+	switch (v.action) {
+	case gdp::CardVerdict::kPass:
+		card_readers_->transmit(slot.reader, sequence, apdu, slot.policy.selected_aid());
+		return;
+	case gdp::CardVerdict::kRefuse: {
+		const char sw[2] = {static_cast<char>(v.status >> 8), static_cast<char>(v.status & 0xff)};
+		client_.send_smartcard_response(i, sequence, gdp::session::SMARTCARD_ERROR_NONE, std::string(sw, 2));
+		if (v.notify) {
+			SLOG_ERROR("spectre: smartcard: \"%s\": the host tried to %s; refused", slot.reader.c_str(),
+				v.refused_what.c_str());
+			notify(NoticeLevel::kWarning, "The host tried to " + v.refused_what, kToastUs, "card-request", "Refused.");
+			mark_ui_dirty();
+		} else {
+			SLOG_INFO("spectre: smartcard: \"%s\": refused: %s", slot.reader.c_str(), v.refused_what.c_str());
+		}
+		return;
+	}
+	case gdp::CardVerdict::kAsk: ask_card_consent(i, sequence, apdu, v.consent); return;
+	}
+}
+
+void StreamSession::ask_card_consent(uint32_t i, uint32_t sequence, const std::string &apdu,
+	const gdp::CardConsent &consent) {
+	constexpr int kMaxDenials = 3;
+	constexpr uint64_t kPromptUs = 30000000;
+	const std::string reader = card_slots_[i].reader;
+	gdp::CardConsentText text = gdp::describe_card_consent(consent, gdp::plain_reader_name(reader));
+	auto refuse = [this, i, sequence] {
+		const char sw[2] = {static_cast<char>(gdp::kSwSecurityNotSatisfied >> 8),
+			static_cast<char>(gdp::kSwSecurityNotSatisfied & 0xff)};
+		client_.send_smartcard_response(i, sequence, gdp::session::SMARTCARD_ERROR_NONE, std::string(sw, 2));
+	};
+	if (key_denials_ >= kMaxDenials) {
+		SLOG_INFO("spectre: smartcard: \"%s\": %s -- refused unasked after %d denials", reader.c_str(),
+			text.what.c_str(), key_denials_);
+		refuse();
+		notify(NoticeLevel::kWarning, "Refused: " + text.title, 10000000, "card-request",
+			"You turned down three requests from this host. Reconnect to be asked again.");
+		mark_ui_dirty();
+		return;
+	}
+	PromptSpec spec;
+	spec.level = NoticeLevel::kWarning;
+	spec.title = text.title;
+	spec.body = text.body;
+	spec.allow_label = text.allow_label;
+	spec.deny_label = text.deny_label;
+	spec.timeout_us = kPromptUs;
+	SLOG_INFO("spectre: smartcard: \"%s\": asking: %s", reader.c_str(), text.what.c_str());
+	card_slots_[i].prompt = ask(std::move(spec), [this, i, sequence, apdu, reader, refuse](const PromptAnswer &answer) {
+		if (card_slots_[i].reader != reader) {
+			return; // the reader went while the prompt was up
+		}
+		card_slots_[i].prompt = 0;
+		SLOG_INFO("spectre: smartcard: \"%s\": request %s", reader.c_str(), answer.allowed ? "allowed" : "refused");
+		if (!answer.allowed) {
+			key_denials_++;
+			refuse();
+			return;
+		}
+		card_readers_->transmit(reader, sequence, apdu, card_slots_[i].policy.selected_aid());
+	});
+}
+
+void StreamSession::end_card_slot(uint32_t i) {
+	CardSlot &slot = card_slots_[i];
+	if (slot.prompt) {
+		notices_.cancel(slot.prompt);
+		prompt_handlers_.erase(slot.prompt);
+		sync_prompt_mode();
+		mark_ui_dirty();
+	}
+	if (card_readers_ && !slot.reader.empty()) {
+		card_readers_->release(slot.reader);
+	}
+	slot = CardSlot{};
+}
+
+void StreamSession::on_smartcard_rejected(uint32_t i, const std::string &reason) {
+	if (i >= gdp::kMaxSmartcardReaders || card_slots_[i].reader.empty()) {
+		return;
+	}
+	const std::string reader = card_slots_[i].reader;
+	SLOG_ERROR("spectre: smartcard: the host refused reader \"%s\" (%s)", reader.c_str(), reason.c_str());
+	refused_readers_.insert(reader);
+	end_card_slot(i);
+	notify(NoticeLevel::kWarning, "The host refused " + gdp::plain_reader_name(reader), 5000000);
 	mark_ui_dirty();
 }
 

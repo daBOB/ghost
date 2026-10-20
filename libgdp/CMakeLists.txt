@@ -82,6 +82,7 @@ add_library(gdp STATIC
   src/clipboard.cpp
   src/file_list.cpp
   src/security_key.cpp
+  src/smartcard.cpp
   src/file_transfer.cpp
   src/remote_files.cpp
   src/remote_mount.cpp
@@ -188,6 +189,10 @@ if(NOT WIN32)
   target_link_libraries(gdp_remote_mount_test PRIVATE gdp Threads::Threads)
   add_test(NAME gdp_remote_mount_test COMMAND gdp_remote_mount_test)
 endif()
+
+add_executable(gdp_smartcard_test tests/smartcard_test.cpp)
+target_link_libraries(gdp_smartcard_test PRIVATE gdp)
+add_test(NAME gdp_smartcard_test COMMAND gdp_smartcard_test)
 
 add_executable(gdp_refine_test tests/refine_test.cpp)
 target_link_libraries(gdp_refine_test PRIVATE gdp)

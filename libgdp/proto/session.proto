@@ -513,12 +513,18 @@ message InputEnvelope {
     SecurityKeyConnect security_key_connect = 14;
     SecurityKeyDisconnect security_key_disconnect = 15;
     SecurityKeyInput security_key_input = 16;
+    SmartcardReaderAdded smartcard_reader_added = 17;
+    SmartcardReaderRemoved smartcard_reader_removed = 18;
+    SmartcardCardInserted smartcard_card_inserted = 19;
+    SmartcardCardRemoved smartcard_card_removed = 20;
+    SmartcardPowered smartcard_powered = 21;
+    SmartcardResponse smartcard_response = 22;
   }
 }
 
-// wraith -> spectre on the input stream, only under the "hid" and
-// "security-key" capabilities (gdp-spec.md §8.4, §8.6, §8.7). Nothing
-// else is sent toward the client there.
+// wraith -> spectre on the input stream, only under the "hid",
+// "security-key" and "smartcard" capabilities (gdp-spec.md §8.4, §8.6,
+// §8.7, §8.8). Nothing else is sent toward the client there.
 message HostInputEnvelope {
   oneof event {
     HidRejected hid_rejected = 1;
@@ -527,6 +533,9 @@ message HostInputEnvelope {
     HidSetReport hid_set_report = 4;
     SecurityKeyRejected security_key_rejected = 5;
     SecurityKeyOutput security_key_output = 6;
+    SmartcardRejected smartcard_rejected = 7;
+    SmartcardPower smartcard_power = 8;
+    SmartcardTransmit smartcard_transmit = 9;
   }
 }
 
@@ -707,6 +716,96 @@ message SecurityKeyInput {
 message SecurityKeyOutput {
   uint32 key_index = 1;
   bytes data = 2;
+}
+
+// Smart cards (gdp-spec.md §8.8), only on a session that negotiated
+// "smartcard". The client forwards up to two PC/SC readers, each in a slot
+// `reader_index`; the host presents each as a reader of its own and relays
+// the card's power and APDUs to the client, which passes, refuses or asks
+// its user about each command (gdp/smartcard.hpp's CardPolicy). The host
+// keeps each reader's card state from these events, so its PC/SC
+// daemon's presence polling never crosses the network.
+
+// spectre -> wraith: a reader appeared in the slot, with or without a card.
+// One for an occupied slot replaces its reader.
+message SmartcardReaderAdded {
+  uint32 reader_index = 1;  // 0 or 1
+  string name = 2;          // the reader's PC/SC name; at most 128 bytes
+  bool card_present = 3;
+  bytes atr = 4;            // the card's ATR, when present; at most 33 bytes
+}
+
+// spectre -> wraith: the slot's reader went away or is no longer forwarded.
+message SmartcardReaderRemoved {
+  uint32 reader_index = 1;
+}
+
+// spectre -> wraith: a card went into the slot's reader.
+message SmartcardCardInserted {
+  uint32 reader_index = 1;
+  bytes atr = 2;
+}
+
+// spectre -> wraith: the card left the slot's reader. Whatever the host had
+// outstanding on it is answered first, with an error.
+message SmartcardCardRemoved {
+  uint32 reader_index = 1;
+}
+
+// wraith -> spectre: the host will not, or could not, present the slot's
+// reader, and the slot is empty.
+message SmartcardRejected {
+  uint32 reader_index = 1;
+  string reason = 2;  // for logs
+}
+
+enum SmartcardPowerAction {
+  SMARTCARD_POWER_ACTION_UNSPECIFIED = 0;
+  SMARTCARD_POWER_ACTION_UP = 1;     // power the card up, or reset it if powered
+  SMARTCARD_POWER_ACTION_DOWN = 2;
+  SMARTCARD_POWER_ACTION_RESET = 3;  // a warm reset: what the card held for the session is gone
+}
+
+enum SmartcardError {
+  SMARTCARD_ERROR_NONE = 0;
+  SMARTCARD_ERROR_NO_CARD = 1;  // no card in the reader, or it was removed
+  SMARTCARD_ERROR_BUSY = 2;     // a program at the client holds the card
+  SMARTCARD_ERROR_FAILED = 3;   // anything else
+}
+
+// wraith -> spectre: power the slot's card up or down, or reset it.
+// Answered by one SmartcardPowered with the same sequence.
+message SmartcardPower {
+  uint32 reader_index = 1;
+  uint32 sequence = 2;
+  SmartcardPowerAction action = 3;
+}
+
+// spectre -> wraith: the answer to SmartcardPower: the card's ATR after a
+// power-up or reset, or an error.
+message SmartcardPowered {
+  uint32 reader_index = 1;
+  uint32 sequence = 2;
+  SmartcardError error = 3;
+  bytes atr = 4;
+}
+
+// wraith -> spectre: one command APDU for the slot's powered card. At most
+// one is outstanding per reader. Answered by one SmartcardResponse with
+// the same sequence.
+message SmartcardTransmit {
+  uint32 reader_index = 1;
+  uint32 sequence = 2;
+  bytes apdu = 3;  // 4 to 65544 bytes
+}
+
+// spectre -> wraith: the card's response APDU, status word last, or the
+// client's in the card's place for a command it refused; or an error.
+message SmartcardResponse {
+  uint32 reader_index = 1;
+  uint32 sequence = 2;
+  SmartcardError error = 3;
+  bytes response = 4;  // 2 to 65538 bytes
 }
 
 message TouchEvent {

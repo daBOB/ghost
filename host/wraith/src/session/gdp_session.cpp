@@ -128,6 +128,20 @@ GdpSession::GdpSession(SessionHost &host, TokenValidator token_validator, const 
 		keys_ = std::make_unique<SecurityKeys>(control_socket, host_.event_loop(),
 			[this](const gdp::session::HostInputEnvelope &env) { send_host_input(env); });
 	}
+	Smartcards::Paths card_paths;
+	if (Smartcards::installed(&card_paths)) {
+		cards_ = std::make_unique<Smartcards>(card_paths, host_.event_loop(),
+			[this](const gdp::session::HostInputEnvelope &env) { send_host_input(env); });
+		std::string error;
+		if (!cards_->start(&error)) {
+			WLOG_ERROR("smartcard: can't present smart cards: %s", error.c_str());
+			cards_.reset();
+		} else if (!control_socket.empty()) {
+			cards_->publish_environment();
+		}
+	} else {
+		WLOG_INFO("smartcard: no pcscd or no ghost reader driver on this host -- smart cards disabled");
+	}
 	// QUIC's own congestion controller, under wraith's rate control: CUBIC
 	// unless wraith.toml says network.congestion_control = "bbr"
 	// (docs/design/transport-and-rate-control.md#congestion-control).
@@ -207,6 +221,9 @@ void GdpSession::reset_session(uint64_t error_code) {
 	}
 	if (keys_) {
 		keys_->disconnect_all();
+	}
+	if (cards_) {
+		cards_->remove_all();
 	}
 	if (authenticated_) {
 		host_.session().set_viewer_attached(false);
@@ -875,6 +892,9 @@ std::vector<std::string> GdpSession::supported_capabilities() const {
 	if (keys_) {
 		supported.push_back(gdp::kCapabilitySecurityKey);
 	}
+	if (cards_) {
+		supported.push_back(gdp::kCapabilitySmartcard);
+	}
 	// Opened with the host's other services, before any client attaches.
 	if (host_.session().microphone()) {
 		supported.push_back(gdp::kCapabilityMicrophone);
@@ -1106,6 +1126,15 @@ bool GdpSession::raw_negotiated() const {
 
 bool GdpSession::security_keys_negotiated() const {
 	return keys_ && gdp::has_capability(capabilities_, gdp::kCapabilitySecurityKey);
+}
+
+bool GdpSession::smartcards_negotiated() const {
+	return cards_ && gdp::has_capability(capabilities_, gdp::kCapabilitySmartcard);
+}
+
+std::string GdpSession::smartcard_socket() const {
+	Smartcards::Paths paths;
+	return cards_ && Smartcards::installed(&paths) ? Smartcards::client_socket(paths.dir) : "";
 }
 
 void GdpSession::handle_gamepad_connect(const gdp::session::GamepadConnect &connect) {
@@ -1506,6 +1535,20 @@ void GdpSession::handle_input_data(Peer *peer, const uint8_t *data, size_t len) 
 		} else if (env.has_security_key_input()) {
 			if (security_keys_negotiated()) {
 				keys_->input(env.security_key_input());
+			}
+		} else if (smartcards_negotiated()) {
+			if (env.has_smartcard_reader_added()) {
+				cards_->reader_added(env.smartcard_reader_added());
+			} else if (env.has_smartcard_reader_removed()) {
+				cards_->reader_removed(env.smartcard_reader_removed().reader_index());
+			} else if (env.has_smartcard_card_inserted()) {
+				cards_->card_inserted(env.smartcard_card_inserted());
+			} else if (env.has_smartcard_card_removed()) {
+				cards_->card_removed(env.smartcard_card_removed().reader_index());
+			} else if (env.has_smartcard_powered()) {
+				cards_->powered(env.smartcard_powered());
+			} else if (env.has_smartcard_response()) {
+				cards_->response(env.smartcard_response());
 			}
 		}
 		// TouchEvent: ignored; wraith has no uinput touch device.

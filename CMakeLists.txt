@@ -104,6 +104,7 @@ endif()
 
 add_subdirectory(libgdp)
 if(GHOST_BUILD_HOST)
+  add_subdirectory(host/ifd-ghost)
   add_subdirectory(host/wraith)
 endif()
 add_subdirectory(client/spectre)

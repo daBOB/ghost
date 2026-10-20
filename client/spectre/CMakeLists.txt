@@ -148,6 +148,7 @@ add_executable(spectre
   src/stream/stream_session.cpp
   src/input/raw_controller.cpp
   src/input/security_key.cpp
+  src/input/smartcard.cpp
   src/ui/font.cpp
   src/ui/glyphs.cpp
   src/ui/hotkey.cpp
@@ -184,6 +185,23 @@ target_link_libraries(spectre PRIVATE
   PkgConfig::OPUS
   Vulkan::Vulkan
 )
+# Smart card readers (src/input/smartcard.cpp) through the platform's
+# PC/SC: pcsc-lite on Linux, optional (`apt install libpcsclite-dev`);
+# PCSC.framework and WinSCard are always there.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  pkg_check_modules(PCSCLITE IMPORTED_TARGET libpcsclite)
+  if(PCSCLITE_FOUND)
+    target_compile_definitions(spectre PRIVATE SPECTRE_HAVE_PCSC)
+    target_link_libraries(spectre PRIVATE PkgConfig::PCSCLITE)
+  else()
+    message(STATUS "spectre: no libpcsclite, so no smart card forwarding (apt install libpcsclite-dev)")
+  endif()
+elseif(APPLE)
+  target_link_libraries(spectre PRIVATE "-framework PCSC")
+else()
+  target_link_libraries(spectre PRIVATE winscard)
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(spectre PRIVATE PkgConfig::LIBVA PkgConfig::LIBVA_DRM)
 elseif(APPLE)

@@ -47,7 +47,7 @@ RUN if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
                 libva-dev libvulkan-dev libprotobuf-dev libzstd-dev qt6-base-dev \
                 libwayland-dev libxkbcommon-dev libdecor-0-dev libasound2-dev \
                 libdrm-dev libgbm-dev libegl-dev libgles-dev libudev-dev libdbus-1-dev \
-                libsdl3-dev libngtcp2-dev libngtcp2-crypto-ossl-dev; do \
+                libsdl3-dev libngtcp2-dev libngtcp2-crypto-ossl-dev libpcsclite-dev; do \
             echo "$pkg:$TARGETARCH"; done) \
  && rm -rf /var/lib/apt/lists/*
 # Every CMake configure below (and in build-pyrowave.sh) picks this up from
@@ -156,13 +156,16 @@ RUN case "$TARGETARCH" in \
 # output the Veil profile's audio_output names (docs/design/wisp.md).
 # swayidle and wlopm turn the display off after the profile's idle time
 # (the greeter's display_sleep.cpp). wlr-randr sets a 4K-class output's
-# scale (wisp-session).
+# scale (wisp-session). pcscd and libccid let spectre reach smart card
+# readers (and a YubiKey's) to forward them; the logged-in kiosk session is
+# local and active, which pcscd's polkit rule asks.
 COPY --from=build /out/runtime-packages /tmp/runtime-packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
         labwc qt6-wayland fonts-dejavu-core swayidle wlopm wlr-randr \
         libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdecor-0-0 \
         libegl1 libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers mesa-libgallium \
         libasound2t64 alsa-ucm-conf pipewire pipewire-alsa wireplumber \
+        pcscd libccid \
         $(if [ "$TARGETARCH" = amd64 ]; then echo intel-media-va-driver; fi) \
         $(cat /tmp/runtime-packages) \
  && rm -rf /var/lib/apt/lists/* /tmp/runtime-packages

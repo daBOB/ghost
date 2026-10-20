@@ -71,7 +71,7 @@ sudo apt install build-essential cmake ninja-build pkg-config git curl \
   wayland-protocols libwayland-dev libxkbcommon-dev \
   libdrm-dev libva-dev libgbm-dev libx264-dev libzstd-dev \
   libtomlplusplus-dev libpipewire-0.3-dev libopus-dev \
-  libei-dev libsystemd-dev libfuse3-dev \
+  libei-dev libsystemd-dev libfuse3-dev libpcsclite-dev \
   libsdl3-dev libavcodec-dev libavutil-dev libvulkan-dev glslang-tools \
   qt6-base-dev libpam0g-dev cargo
 ```
@@ -90,7 +90,7 @@ sudo dnf install gcc gcc-c++ cmake ninja-build pkgconf-pkg-config git curl \
   wayland-protocols-devel wayland-devel libxkbcommon-devel \
   libdrm-devel libva-devel mesa-libgbm-devel x264-devel libzstd-devel \
   tomlplusplus-devel pipewire-devel opus-devel \
-  libei-devel systemd-devel fuse3-devel \
+  libei-devel systemd-devel fuse3-devel pcsc-lite-devel \
   SDL3-devel ffmpeg-devel vulkan-loader-devel vulkan-headers glslang \
   qt6-qtbase-devel pam-devel cargo
 ```
@@ -103,7 +103,7 @@ sudo dnf install gcc gcc-c++ cmake ninja-build pkgconf-pkg-config git curl \
 sudo pacman -S --needed base-devel cmake ninja pkgconf git curl \
   protobuf openssl libngtcp2 \
   wayland-protocols wayland libxkbcommon libdrm libva \
-  mesa x264 zstd tomlplusplus libpipewire opus libei systemd-libs fuse3 \
+  mesa x264 zstd tomlplusplus libpipewire opus libei systemd-libs fuse3 pcsclite \
   sdl3 ffmpeg vulkan-icd-loader vulkan-headers glslang \
   qt6-base pam rust
 ```
@@ -114,7 +114,9 @@ At runtime, a host needs the compositor of each session type it offers
 whose programs are missing is not listed. Pasting files across and shared
 folders need FUSE (`fusermount3`) on both ends, except that a Windows
 client pastes the host's files without it; libfuse3's headers at build
-time (optional: without them both ends build and leave it out).
+time (optional: without them both ends build and leave it out). Smart card
+forwarding needs `pcscd` on both ends, and pcsc-lite's headers at build
+time (optional likewise).
 
 ### Build
 

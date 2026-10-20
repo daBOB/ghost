@@ -31,6 +31,7 @@ are in `$PREFIX/share/doc/ghost/`.
 | `$PREFIX/bin/veild` | Veil, from `make install-veil` only. |
 | `$PREFIX/lib/ghost/ghostauth`, `ghostseat`, `ghostlogin` | The PAM helper, the session's root process and the PAM hook. Run by systemd's socket units and by PAM, not from a shell. |
 | `$PREFIX/lib/ghost/sessions/` | Launchers the shipped profiles point at. |
+| `$PREFIX/lib/ghost/pcsc/libifd-ghost.so` | The reader driver the session's pcscd loads for each forwarded smart card reader ([gdp-spec.md §8.8](../spec/gdp-spec.md#88-smart-cards)). wraith looks for it in `lib/ghost/pcsc` beside its own `bin/` first. |
 | `$PREFIX/share/ghost/sessions.d/` | Shipped session profiles. |
 | `$PREFIX/share/ghost/labwc/` | The labwc session types' configuration. |
 | `$PREFIX/lib/systemd/system/ghostd.service`, `veild.service` | System units. |
@@ -56,6 +57,7 @@ are in `$PREFIX/share/doc/ghost/`.
 | `/run/ghost/ghostlogin.sock` | ghostlogin to ghostd; ghostd's, 0600. |
 | `/run/ghost/spent-tickets/` | The authentication tickets ghostseat has accepted, one empty file per nonce, pruned after their ten minutes; root, 0700 ([authentication](../design/login-and-sessions.md#authentication)). |
 | `$XDG_RUNTIME_DIR/wraith.sock` | The running wraith's own control socket, mode 0600, for that user's commands (`wraith --report`). |
+| `$XDG_RUNTIME_DIR/ghost/smartcard/` | The session's smart card forwarding, mode 0700: `pcscd.comm`, the socket of the session's own pcscd (the desktop's `PCSCLITE_CSOCK_NAME`); `reader-N.sock`, each forwarded reader's, which the driver connects to; `readers/`, pcscd's reader configuration, written by wraith. |
 | `/var/lib/ghost/` | ghostd's state directory, owned by `ghost`, mode 0700. |
 | `/var/lib/ghost/last-types.json` | Each user's last session type, the lobby's preselection ([what ghostd remembers](../design/login-and-sessions.md#what-ghostd-remembers)). |
 | `/var/lib/veil/veil.db` | Veil's database (`[state] database`), owned by `veil`, mode 0700. |

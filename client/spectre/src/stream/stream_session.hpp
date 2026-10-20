@@ -20,7 +20,9 @@
 #include "gdp/gamepad.hpp"
 #include "input/raw_controller.hpp"
 #include "input/security_key.hpp"
+#include "input/smartcard.hpp"
 #include "gdp/security_key.hpp"
+#include "gdp/smartcard.hpp"
 #include "gdp/remote_files.hpp"
 #include "net/file_transfers.hpp"
 #include "net/host_file_reads.hpp"
@@ -192,9 +194,19 @@ struct StreamOptions {
 	// key to sign in anywhere, and only the user's touch says no.
 	bool forward_security_keys = false;
 	// Refuse a forwarded key's maintenance (reset, PIN changes, passkey and
-	// fingerprint management, configuration) outright rather than asking
-	// the user (spectre -u, gdp/security_key.hpp's KeyPolicy).
+	// fingerprint management, configuration), and a forwarded card's
+	// writes, outright rather than asking the user (spectre -u,
+	// gdp/security_key.hpp's KeyPolicy, gdp/smartcard.hpp's CardPolicy).
 	bool refuse_key_maintenance = false;
+	// Offer "smartcard" and forward this machine's smart card readers to
+	// the host (gdp-spec.md §8.8), plugged in now or during the session
+	// (spectre -Y). Off by default: the host can then sign with a card
+	// whose PIN it is given.
+	bool forward_smartcards = false;
+	// Pass the commands for applets the card policy doesn't know, unread
+	// (spectre -y): a national ID card, a CAC. A YubiKey's other applets
+	// stay refused.
+	bool pass_unknown_cards = false;
 	// Offer the "microphone" capability and, if the host takes it, send
 	// the default recording device to it (spectre -M). Off by default: a
 	// microphone is never opened unless the user asked for one.
@@ -372,6 +384,18 @@ private:
 	void withdraw_key_prompt(uint32_t i, uint32_t cid);
 	void withdraw_key_prompts(uint32_t i);
 	void drain_key_replies();
+	// Smart cards (gdp-spec.md §8.8): readers and cards as the PC/SC
+	// watcher reports them, and the card's answers, each through its
+	// slot's policy before the host sees it.
+	void handle_smartcard_events();
+	void on_smartcard_power(uint32_t i, uint32_t sequence, int action);
+	void on_smartcard_transmit(uint32_t i, uint32_t sequence, const std::string &apdu);
+	void on_smartcard_rejected(uint32_t i, const std::string &reason);
+	void ask_card_consent(uint32_t i, uint32_t sequence, const std::string &apdu, const gdp::CardConsent &consent);
+	// The slot's reader went away: its prompt is moot and its card let go.
+	void end_card_slot(uint32_t i);
+	// The slot forwarding `reader`, or -1.
+	int card_slot(const std::string &reader) const;
 	// Any axis/button event: marks the slot so flush_gamepads() sends one
 	// snapshot for it, however many SDL events the poll batch held.
 	void mark_gamepad_dirty(uint32_t instance_id);
@@ -780,8 +804,9 @@ private:
 	uint64_t key_attached_us_[gdp::kMaxSecurityKeys] = {};
 	// Prompts up (or queued) for held key requests, by slot and channel.
 	std::map<std::pair<uint32_t, uint32_t>, uint64_t> key_prompts_;
-	// Maintenance requests the user turned down or let time out on this
-	// connection: from the third, the rest are refused without asking.
+	// Maintenance requests (a key's, or a card's writes) the user turned
+	// down or let time out on this connection: from the third, the rest
+	// are refused without asking.
 	int key_denials_ = 0;
 	uint64_t next_key_keepalive_us_ = 0;
 	// Keys the host refused or that couldn't be opened, by path: left
@@ -792,6 +817,21 @@ private:
 	uint32_t hid_change_count_ = 0;
 	bool keys_scanned_ = false;
 	uint64_t next_key_check_us_ = 0;
+
+	// Forwarded smart card readers, one per wire slot (SmartcardReader*.
+	// reader_index), each with the policy on the host's APDUs for its card
+	// (gdp-spec.md §8.8) and the prompt up for a write, if any.
+	struct CardSlot {
+		std::string reader; // empty: the slot is free
+		gdp::CardPolicy policy;
+		uint64_t prompt = 0;
+	};
+	CardSlot card_slots_[gdp::kMaxSmartcardReaders];
+	// Readers past the two slots, or that the host refused: left alone
+	// until they go away.
+	std::set<std::string> refused_readers_;
+	// Its threads report through a queue, drained on the main loop.
+	std::unique_ptr<SmartcardReaders> card_readers_;
 
 	bool running_ = true;
 	// The presenter reported an unrecoverable Vulkan error (see

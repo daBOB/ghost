@@ -60,9 +60,17 @@ struct SpectreSettings {
 	// gdp-spec.md §8.7). Off by default everywhere: a forwarded key signs
 	// whatever the session asks, once the user touches it.
 	bool forward_security_keys = false;
-	// With forward_security_keys: refuse a key's maintenance outright
-	// (spectre -u) instead of asking the user about each request.
+	// With forward_security_keys or forward_smartcards: refuse a key's
+	// maintenance and a card's writes outright (spectre -u) instead of
+	// asking the user about each request.
 	bool refuse_key_maintenance = false;
+	// Forward this machine's smart card readers (spectre -Y,
+	// gdp-spec.md §8.8). Off by default everywhere: the session can sign
+	// with a card whose PIN it is given.
+	bool forward_smartcards = false;
+	// With forward_smartcards: pass cards and applets spectre can't read
+	// through unfiltered (spectre -y).
+	bool pass_unknown_cards = false;
 	// Send this machine's microphone to the host (spectre -M). Off by
 	// default everywhere: nothing records until the user ticks it.
 	bool microphone = false;

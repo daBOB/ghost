@@ -147,6 +147,9 @@ public:
 	// Whether to offer "security-key" (gdp-spec.md §8.7) -- spectre -U.
 	// Must be called before connect(). Off means no key is ever opened.
 	void set_security_keys(bool enabled) { offer_security_key_ = enabled; }
+	// Whether to offer "smartcard" (gdp-spec.md §8.8) -- spectre -Y.
+	// Must be called before connect(). Off means no reader is ever opened.
+	void set_smartcards(bool enabled) { offer_smartcard_ = enabled; }
 
 	// Whether to offer the "microphone" capability (gdp/audio_format.hpp)
 	// -- spectre -M. Must be called before connect(). Off means the
@@ -278,6 +281,24 @@ public:
 	// What the host sends about security keys; fire only from dispatch().
 	std::function<void(uint32_t key_index, const std::string &reason)> on_security_key_rejected;
 	std::function<void(uint32_t key_index, const std::string &packet)> on_security_key_output;
+
+	// Smart cards (gdp-spec.md §8.8). No-ops unless smartcards_enabled();
+	// from the main thread, which reads every answer to the host through
+	// the card's policy first. `error` is a gdp::session::SmartcardError.
+	void send_smartcard_reader_added(uint32_t reader_index, const std::string &name, bool card_present,
+		const std::string &atr);
+	void send_smartcard_reader_removed(uint32_t reader_index);
+	void send_smartcard_card_inserted(uint32_t reader_index, const std::string &atr);
+	void send_smartcard_card_removed(uint32_t reader_index);
+	void send_smartcard_powered(uint32_t reader_index, uint32_t sequence, int error, const std::string &atr);
+	void send_smartcard_response(uint32_t reader_index, uint32_t sequence, int error, const std::string &response);
+	// True once SessionAccept put "smartcard" in effect.
+	bool smartcards_enabled() const { return smartcard_enabled_; }
+	// What the host sends about smart cards; fire only from dispatch().
+	// `action` is a gdp::session::SmartcardPowerAction.
+	std::function<void(uint32_t reader_index, const std::string &reason)> on_smartcard_rejected;
+	std::function<void(uint32_t reader_index, uint32_t sequence, int action)> on_smartcard_power;
+	std::function<void(uint32_t reader_index, uint32_t sequence, const std::string &apdu)> on_smartcard_transmit;
 	void request_keyframe();
 	// Sends the local clipboard's text to wraith (gdp-spec.md §7.9). A
 	// no-op before SessionAccept, unless the session negotiated the
@@ -428,6 +449,7 @@ private:
 	bool offer_gamepad_ = false;
 	bool offer_hid_ = false;
 	bool offer_security_key_ = false;
+	bool offer_smartcard_ = false;
 	bool offer_refine_ = true;
 	bool offer_file_ = true;
 	bool offer_file_share_ = false;
@@ -453,6 +475,7 @@ private:
 	bool gamepad_enabled_ = false;
 	std::atomic<bool> hid_enabled_{false};
 	std::atomic<bool> security_key_enabled_{false};
+	bool smartcard_enabled_ = false;
 	bool offer_microphone_ = false;
 	bool microphone_enabled_ = false;
 	gdp::AudioFormat microphone_format_;

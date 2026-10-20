@@ -85,9 +85,17 @@ static void usage(const char *argv0) {
 	printf("            them; keys plugged in during the session too. Anything in the session can\n");
 	printf("            then ask a key to sign in anywhere, which only your touch on the key\n");
 	printf("            approves. Off by default\n");
-	printf("  -u        with -U: refuse a key's maintenance (reset, PIN changes, managing passkeys\n");
-	printf("            and fingerprints, its settings) outright. Otherwise each such request asks\n");
-	printf("            you first, and goes to the key only if you allow it\n");
+	printf("  -Y        forward this machine's smart card readers (PIV and OpenPGP cards, a YubiKey's\n");
+	printf("            smart card side) to the host, if it supports that, so the session's programs\n");
+	printf("            can sign and decrypt with the card; readers plugged in during the session\n");
+	printf("            too. Writing to a card asks you first. Off by default\n");
+	printf("  -y        with -Y: also pass cards and applets the client can't read (a national ID\n");
+	printf("            card, a CAC) through unfiltered, writes and all. A YubiKey's other applets\n");
+	printf("            stay refused. Off by default\n");
+	printf("  -u        with -U or -Y: refuse a key's maintenance (reset, PIN changes, managing\n");
+	printf("            passkeys and fingerprints, its settings) and a card's writes (new keys,\n");
+	printf("            certificates, PIN changes) outright. Otherwise each such request asks you\n");
+	printf("            first, and goes to the device only if you allow it\n");
 	printf("  -M        send this machine's microphone to the host, as a virtual microphone in the\n");
 	printf("            session, if it supports that. Off by default\n");
 	printf("  -S folder share a folder with the host, read-only, for the session: it shows up in\n");
@@ -235,6 +243,10 @@ int main(int argc, char *argv[]) {
 			options.forward_security_keys = true;
 		} else if (strcmp(arg, "-u") == 0) {
 			options.refuse_key_maintenance = true;
+		} else if (strcmp(arg, "-Y") == 0) {
+			options.forward_smartcards = true;
+		} else if (strcmp(arg, "-y") == 0) {
+			options.pass_unknown_cards = true;
 		} else if (strcmp(arg, "-M") == 0) {
 			options.microphone = true;
 		} else if (strcmp(arg, "-S") == 0) {

@@ -177,6 +177,8 @@ add_executable(wraith
   src/session/gamepad_devices.cpp
   src/session/raw_controllers.cpp
   src/session/security_keys.cpp
+  src/session/smartcards.cpp
+  src/session/pcscd.cpp
   src/session/uhid_codec.cpp
   src/session/seat_client.cpp
   src/session/session_cert.cpp
@@ -220,6 +222,12 @@ target_include_directories(wraith SYSTEM PRIVATE third_party)
 
 target_compile_definitions(wraith PRIVATE
   GHOST_DATADIR="${CMAKE_INSTALL_PREFIX}/share/ghost")
+# Smart cards (session/smartcards.hpp) only with ghost's reader driver,
+# which needs pcsc-lite's headers (host/ifd-ghost).
+target_include_directories(wraith PRIVATE "${CMAKE_SOURCE_DIR}/host/ifd-ghost")
+if(GHOST_IFD_DRIVER_PATH)
+  target_compile_definitions(wraith PRIVATE GHOST_IFD_DRIVER_PATH="${GHOST_IFD_DRIVER_PATH}")
+endif()
 
 target_link_libraries(wraith PRIVATE
   PkgConfig::WAYLAND_SERVER
@@ -297,6 +305,23 @@ target_include_directories(wraith_seat_device_fd_test PRIVATE src "${WRAITH_CONT
 target_link_libraries(wraith_seat_device_fd_test PRIVATE gdp protobuf::libprotobuf)
 target_compile_options(wraith_seat_device_fd_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wraith_seat_device_fd_test COMMAND wraith_seat_device_fd_test)
+
+# Smart cards' host end (session/smartcards.hpp, session/pcscd.hpp): a
+# real pcscd loading the built reader driver, a fake client, and a PC/SC
+# program through libpcsclite. Skipped where pcscd isn't installed.
+pkg_check_modules(PCSCLITE IMPORTED_TARGET libpcsclite)
+if(TARGET ifd-ghost AND PCSCLITE_FOUND)
+  add_executable(wraith_smartcards_test tests/smartcards_test.cpp src/session/smartcards.cpp src/session/pcscd.cpp
+    src/util/log.cpp)
+  target_include_directories(wraith_smartcards_test PRIVATE src "${CMAKE_SOURCE_DIR}/host/ifd-ghost")
+  target_compile_definitions(wraith_smartcards_test PRIVATE GHOST_IFD_DRIVER_PATH="${GHOST_IFD_DRIVER_PATH}"
+    IFD_GHOST_TEST_DRIVER="$<TARGET_FILE:ifd-ghost>")
+  target_link_libraries(wraith_smartcards_test PRIVATE gdp PkgConfig::WAYLAND_SERVER PkgConfig::PCSCLITE
+    PkgConfig::LIBSYSTEMD Threads::Threads)
+  target_compile_options(wraith_smartcards_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  add_dependencies(wraith_smartcards_test ifd-ghost)
+  add_test(NAME wraith_smartcards_test COMMAND wraith_smartcards_test)
+endif()
 
 # wraith.sock's wire (session/report_server.hpp): a forked client against a
 # real ReportServer. GdpSession is stood in for by the test itself.
