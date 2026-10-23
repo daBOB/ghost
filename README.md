@@ -131,9 +131,10 @@ alone also builds on macOS ([packaging/macos/](packaging/macos/README.md))
 and Windows ([packaging/windows/](packaging/windows/README.md)).
 
 `make deb`, `make rpm` and `make arch` build the Ubuntu, Fedora and Arch
-packages into `target/`. Pushing a `v<version>` tag that matches
-`CMakeLists.txt` and `debian/changelog` builds those, the Windows zip and
-the macOS .dmg, and publishes them as a GitHub Release
+packages into `target/`. To release, `make bump V=x.y.z` sets the
+version (in `CMakeLists.txt`, the Cargo workspace and `debian/changelog`);
+commit that, then push a `vx.y.z` tag. The tag builds those packages, the
+Windows zip and the macOS .dmg, and publishes them as a GitHub Release
 ([.github/workflows/release.yml](.github/workflows/release.yml)).
 
 ## Install

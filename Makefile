@@ -30,7 +30,7 @@ GHOST_CERT_DIR      ?= /etc/ghost
 # See packaging/system/pam-render.sh.
 PAM_STACK           ?= auto
 
-.PHONY: all build configure reconfigure test clean distclean debug install uninstall reload cert config authkey accounts install-veil uninstall-veil deb rpm arch
+.PHONY: all build configure reconfigure test clean distclean debug install uninstall reload cert config authkey accounts install-veil uninstall-veil bump deb rpm arch
 
 all: build
 
@@ -374,6 +374,27 @@ uninstall-veil:
 	@rm -f $(VEIL_MANIFEST)
 	@if [ -z "$(DESTDIR)" ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || true; fi
 	@echo "-- kept /etc/ghost/veild.toml, /etc/ghost/veil-{cert,key}.pem, /etc/ghost/veil-wisp.key, /etc/ghost/auth-ticket.key, /var/lib/veil, the accounts and ghost-admins"
+
+# Sets the version everywhere it is written down: CMakeLists.txt (the
+# source of truth, which the C++ side, `make rpm`, `make arch` and the
+# release workflow read), the Cargo workspace (host/Cargo.toml, which every
+# crate inherits) and its Cargo.lock, and a new debian/changelog entry,
+# signed like the one before it. Then commit, tag v$(V) and push the tag
+# (.github/workflows/release.yml).
+#   make bump V=0.6.67
+bump:
+	@set -e; \
+	echo "$(V)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "error: usage: make bump V=x.y.z" >&2; exit 1; }; \
+	old=$$(sed -n 's/^project(ghost VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt); \
+	[ "$$old" != "$(V)" ] || { echo "error: already at $(V)" >&2; exit 1; }; \
+	sed -i 's/^project(ghost VERSION [0-9.]*/project(ghost VERSION $(V)/' CMakeLists.txt; \
+	sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = "[^"]*"/version = "$(V)"/' host/Cargo.toml; \
+	(cd host && cargo update --workspace --quiet); \
+	signer=$$(sed -n '0,/^ -- /s/^ -- \(.*>\)  .*/\1/p' debian/changelog); \
+	{ printf 'ghost (%s) unstable; urgency=medium\n\n  * Version bump to %s.\n\n -- %s  %s\n\n' \
+		"$(V)" "$(V)" "$$signer" "$$(LC_ALL=C date -R)"; cat debian/changelog; } > debian/changelog.new; \
+	mv debian/changelog.new debian/changelog; \
+	echo "-- $$old -> $(V): CMakeLists.txt, host/Cargo.toml, host/Cargo.lock, debian/changelog"
 
 # The Debian packages (ghostd, ghostauth, veild, spectre, libgdp-dev, libpyrowave-shared0):
 # the standard `dpkg-buildpackage`, binary packages only, unsigned, which

@@ -9,7 +9,8 @@
 #
 # Each Linux package is built in a clean container of the release it is
 # for, from its declared build dependencies alone, as an ordinary user.
-# The tag must match the version in CMakeLists.txt and debian/changelog.
+# The tag must match the version in CMakeLists.txt, host/Cargo.toml and
+# debian/changelog (`make bump V=x.y.z` sets all three).
 #
 # Run by hand (workflow_dispatch) it builds everything and leaves the
 # packages as the run's artifacts, without a release. A run on main also
@@ -40,8 +41,9 @@ jobs:
         run: |
           version=$(sed -n 's/^project(ghost VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           deb=$(sed -n '1s/^ghost (\([^)]*\)).*/\1/p' debian/changelog)
-          if [ "$deb" != "$version" ]; then
-            echo "::error::debian/changelog is at $deb, CMakeLists.txt at $version"
+          cargo=$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version = "\([^"]*\)"/\1/p' host/Cargo.toml)
+          if [ "$deb" != "$version" ] || [ "$cargo" != "$version" ]; then
+            echo "::error::CMakeLists.txt is at $version, debian/changelog at $deb, host/Cargo.toml at $cargo (make bump V=x.y.z sets all three)"
             exit 1
           fi
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
