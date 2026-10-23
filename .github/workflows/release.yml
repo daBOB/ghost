@@ -216,11 +216,15 @@ jobs:
           Compress-Archive -Path $out -DestinationPath "dist/$env:PACKAGE.zip"
 
       # From the staged copy, away from build\bin: a DLL the zip lacks
-      # fails here rather than on someone's machine.
+      # fails here (0xC0000135) rather than on someone's machine. Without
+      # arguments spectre prints its usage and exits 1 before touching the
+      # GPU, which the runner doesn't have.
       - name: Smoke test
         run: |
-          & "dist/$env:PACKAGE/spectre.exe" --probe-decoders
-          if ($LASTEXITCODE -ne 0) { throw "spectre.exe exited with $LASTEXITCODE" }
+          $usage = & "dist/$env:PACKAGE/spectre.exe" 2>&1 | Out-String
+          $usage
+          if ($LASTEXITCODE -ne 1 -or $usage -notmatch '(?m)^Usage:') { throw "spectre.exe exited with $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -288,17 +292,22 @@ jobs:
           packaging/macos/bundle.sh build "dist/$PACKAGE.dmg"
 
       # From the mounted image, with the build tree moved away: a dylib the
-      # bundle lacks fails here. The loader's log shows whether it found
-      # the bundled MoltenVK manifest.
+      # bundle lacks stops dyld before main(). spectre without arguments
+      # prints its usage and exits 1 before touching Vulkan, which can't
+      # run here: MoltenVK aborts creating an instance on the runner's
+      # paravirtualized GPU (no argument encoders), although the loader
+      # does find and load the bundled one (VK_LOADER_DEBUG=driver shows
+      # Contents/Resources/vulkan/icd.d/MoltenVK_icd.json).
       - name: Smoke test
         run: |
           mv build build.away
           mnt=$(mktemp -d)
           hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "dist/$PACKAGE.dmg"
-          VK_LOADER_DEBUG=driver "$mnt/Spectre.app/Contents/MacOS/spectre" --probe-decoders 2>&1 | tee probe.log
-          hdiutil detach "$mnt"
-          grep -q 'MoltenVK_icd.json' probe.log ||
-            echo "::warning::the Vulkan loader did not report the bundled MoltenVK manifest"
+          rc=0
+          "$mnt/Spectre.app/Contents/MacOS/spectre" > usage.txt 2>&1 || rc=$?
+          cat usage.txt
+          hdiutil detach -force "$mnt"
+          [ "$rc" -eq 1 ] && grep -q '^Usage:' usage.txt
 
       - name: Upload
         uses: actions/upload-artifact@v4
