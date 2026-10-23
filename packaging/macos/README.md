@@ -81,10 +81,24 @@ Mac keyboards have no Scroll Lock and need Fn for F-keys, so on macOS:
 Cmd is forwarded as Super, the same as the Windows key elsewhere, so the
 remote desktop's Ctrl shortcuts (copy, paste) are Ctrl, not Cmd.
 
+## Bundle
+
+```sh
+packaging/macos/bundle.sh build-macos Spectre.dmg
+```
+
+makes a self-contained `Spectre.app` from the build tree's
+`spectre-qt.app` and puts it in a .dmg: Qt and the vcpkg dylibs (through
+`macdeployqt`, which it finds on `PATH` or through `QT_ROOT_DIR`), and
+MoltenVK, whose ICD manifest goes in `Contents/Resources/vulkan/icd.d`,
+where the Vulkan loader looks without `VK_DRIVER_FILES`. The release
+workflow runs it for the .dmg it publishes. It signs ad hoc; set
+`CODESIGN_IDENTITY` to a Developer ID to sign for distribution.
+
 ## Not done yet
 
-- Bundling the dylibs (vcpkg's, MoltenVK and its ICD file, Qt via
-  `macdeployqt`) into the .app, signing and notarization, and a .dmg.
+- Notarization, and signing with a Developer ID in the release workflow.
+  Until then Gatekeeper asks before the first start (right-click > Open).
 - A zero-copy VideoToolbox path. Frames are copied (one memcpy per row)
   into the presenter's staging image; see
   [the spectre client](../../docs/design/spectre-client.md#presentation).

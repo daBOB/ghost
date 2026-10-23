@@ -68,6 +68,12 @@ Start `build\bin\spectre-qt.exe`, or run `spectre.exe` directly (see
 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
 (x64), which vcpkg does not copy.
 
+The release workflow (`.github/workflows/release.yml`) publishes it as a
+zip: the two executables, the DLLs, `platforms\` and the MSVC runtime
+DLLs, so that one needs no redistributable either. It builds with vcpkg's
+`x64-windows-release` triplet, which builds each dependency once instead
+of twice.
+
 ## Not done yet
 
 - An installer, code signing, and a Start menu entry.

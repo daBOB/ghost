@@ -1,0 +1,212 @@
+# SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# One source package, six binaries, the same split as debian/control and
+# packaging/rpm/ghost.spec: ghostd (host), ghostauth (PAM helper), veild
+# (Veil broker), spectre (client), libgdp (static library and headers) and
+# pyrowave. Everything is built and installed once by the CMake project,
+# into $srcdir/stage; each package_*() then picks out its share.
+#
+# Build with `make arch` at the repo root, which makes the source tarball
+# from the working tree, copies this directory next to it and sets pkgver
+# from CMakeLists.txt (the 0 below is a placeholder).
+#
+# The build needs the network: cargo fetches its crates, and PyroWave is
+# cloned from GitHub (packaging/build-pyrowave.sh).
+
+pkgbase=ghost
+pkgname=(ghostd ghostauth veild spectre libgdp pyrowave)
+pkgver=0
+pkgrel=1
+pkgdesc='Remote desktop sessions over the Ghost Display Protocol'
+arch=(x86_64)
+url='https://github.com/saiko/ghost'
+license=('GPL-3.0-only AND MIT')
+# libgdp ships as a static library, which LTO objects would tie to this
+# exact compiler (as in the RPM spec); and makepkg strips static libraries
+# unless told to keep them.
+options=(!lto staticlibs)
+makedepends=(
+  cmake ninja pkgconf git rust
+  protobuf openssl libngtcp2
+  wayland wayland-protocols libxkbcommon libdrm libva mesa libglvnd
+  x264 zstd tomlplusplus pipewire opus libei fuse3 systemd
+  sdl3 ffmpeg vulkan-icd-loader vulkan-headers glslang
+  qt6-base pam pcsclite desktop-file-utils
+)
+source=("ghost-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "ghost-$pkgver"
+
+  # PyroWave (the optional "pyrowave" codec) has no distro package, so its
+  # pinned commit is built first, into _pyrowave, by the same script `make`
+  # users run; it ships as the pyrowave package. The directory must exist
+  # and be ours, or the script falls back to sudo.
+  mkdir -p "$srcdir/_pyrowave"
+  packaging/build-pyrowave.sh "$srcdir/_pyrowave"
+  export PKG_CONFIG_PATH="$srcdir/_pyrowave/lib/pkgconfig:$srcdir/_pyrowave/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+  # The prefix is baked into ghostd at compile time (host/ghostd/build.rs).
+  # The PAM stack and the pam-configs directory (Debian's pam-auth-update,
+  # absent here) are given explicitly: CMake's defaults probe the build
+  # machine. The polkit rule goes where packages put theirs;
+  # /etc/polkit-1/rules.d is the admin's.
+  cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DGHOST_INSTALL_LIBGDP_DEV=ON \
+    -DGHOST_ENABLE_PYROWAVE=ON \
+    -DGHOST_PAM_STACK=system-auth \
+    -DGHOST_PAM_CONFIGS_DIR= \
+    -DGHOST_POLKIT_RULES_DIR=/usr/share/polkit-1/rules.d
+  # The Rust binaries are built with host/Cargo.toml's release profile, as
+  # everywhere else, not makepkg.conf's RUSTFLAGS.
+  unset RUSTFLAGS
+  cmake --build build
+
+  # Staged here; the package functions copy out of it without its owner,
+  # so the files end up root's.
+  DESTDIR="$srcdir/stage" cmake --install build
+}
+
+check() {
+  cd "ghost-$pkgver"
+  desktop-file-validate "$srcdir/stage/usr/share/applications/spectre-qt.desktop"
+  desktop-file-validate "$srcdir/stage/usr/share/applications/wraith.desktop"
+  # One at a time: the libgdp transport tests share /tmp.
+  ctest --test-dir build --output-on-failure -j1
+}
+
+# Copies each path (a file or a directory) from the stage into $pkgdir.
+_pick() {
+  local p
+  for p in "$@"; do
+    install -d "$pkgdir/${p%/*}"
+    cp -dR --preserve=mode,timestamps,links "$srcdir/stage/$p" "$pkgdir/$p"
+  done
+}
+
+package_ghostd() {
+  pkgdesc='Ghost host: remote desktop sessions over GDP'
+  depends=(
+    "ghostauth=$pkgver-$pkgrel" pyrowave
+    openssl inetutils systemd pam
+    gcc-libs glibc protobuf libngtcp2 zstd
+    wayland libxkbcommon libdrm libva mesa libglvnd
+    x264 ffmpeg pipewire opus libei fuse3 vulkan-icd-loader
+  )
+  optdepends=(
+    'labwc: the default session compositor'
+    'foot: the terminal session type'
+    'xorg-xwayland: X11 applications in sessions'
+    'pcsclite: smart card forwarding'
+    'firewalld: the ghostd service definition'
+  )
+  backup=(etc/ghost/ghostd.toml etc/ghost/wraith.toml etc/pam.d/ghostd etc/pam.d/ghostseat)
+  install=ghostd.install
+
+  cd "ghost-$pkgver"
+  _pick \
+    etc/pam.d/ghostd etc/pam.d/ghostseat \
+    usr/bin/ghostd usr/bin/wraith \
+    usr/lib/ghost/ghostlogin usr/lib/ghost/ghostseat usr/lib/ghost/pcsc usr/lib/ghost/sessions \
+    usr/lib/systemd/system/ghostd.service \
+    usr/lib/systemd/system/ghostseat.socket usr/lib/systemd/system/ghostseat@.service \
+    usr/lib/systemd/user \
+    usr/lib/sysusers.d/ghostd.conf usr/lib/tmpfiles.d/ghost.conf \
+    usr/lib/udev/rules.d/72-ghost-input.rules \
+    usr/share/polkit-1/rules.d/49-ghost-sessions.rules \
+    usr/share/applications/wraith.desktop \
+    usr/share/ghost usr/share/doc/ghost
+  # The live configs: the admin's from the first install on (backup=
+  # above). Pristine copies are in the doc directory.
+  install -Dm644 -t "$pkgdir/etc/ghost" packaging/config/ghostd.toml packaging/config/wraith.toml
+  # Nothing is opened by installing this: firewall-cmd --permanent
+  # --add-service=ghostd, then --reload.
+  install -Dm644 -t "$pkgdir/usr/lib/firewalld/services" packaging/system/firewalld/ghostd.xml
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING LICENSES/*.txt
+}
+
+package_ghostauth() {
+  pkgdesc='Ghost PAM helper'
+  depends=(openssl systemd pam gcc-libs glibc)
+  install=ghostauth.install
+
+  cd "ghost-$pkgver"
+  _pick \
+    usr/lib/ghost/ghostauth \
+    usr/lib/systemd/system/ghostauth.socket usr/lib/systemd/system/ghostauth@.service \
+    usr/lib/sysusers.d/ghostauth.conf
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING LICENSES/*.txt
+}
+
+package_veild() {
+  pkgdesc='Veil: the Ghost broker and web UI'
+  depends=("ghostauth=$pkgver-$pkgrel" openssl inetutils iproute2 systemd pam gcc-libs glibc)
+  optdepends=('firewalld: the veild service definition')
+  backup=(etc/ghost/veild.toml etc/pam.d/veild)
+  install=veild.install
+
+  # veild is built by the same cargo workspace but, deliberately, not
+  # installed by CMake (a host never gets it): its binary comes from the
+  # cargo output, and its unit and PAM service are expanded here.
+  cd "ghost-$pkgver"
+  install -Dm755 host/target/release/veild "$pkgdir/usr/bin/veild"
+  install -d "$pkgdir/usr/lib/systemd/system" "$pkgdir/etc/pam.d"
+  sed 's|@GHOST_BINDIR@|/usr/bin|g' packaging/system/systemd/veild.service.in \
+    > "$pkgdir/usr/lib/systemd/system/veild.service"
+  packaging/system/pam-render.sh system-auth packaging/system/pam.d/veild.in "$pkgdir/etc/pam.d/veild"
+  chmod 0644 "$pkgdir/usr/lib/systemd/system/veild.service" "$pkgdir/etc/pam.d/veild"
+  # The veil account and the ghost-admins group: the fragment the Debian
+  # package installs.
+  install -Dm644 debian/veild.sysusers "$pkgdir/usr/lib/sysusers.d/veild.conf"
+  install -Dm644 -t "$pkgdir/etc/ghost" packaging/config/veild.toml
+  install -Dm644 -t "$pkgdir/usr/lib/firewalld/services" packaging/system/firewalld/veild.xml
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING LICENSES/*.txt
+}
+
+package_spectre() {
+  pkgdesc='Ghost client: spectre and its Qt launcher'
+  depends=(
+    pyrowave
+    gcc-libs glibc openssl protobuf libngtcp2 zstd
+    sdl3 ffmpeg opus libva vulkan-icd-loader qt6-base hicolor-icon-theme
+  )
+  optdepends=(
+    'vulkan-driver: Vulkan Video decode and presentation'
+    'fuse3: the host'"'"'s files on paste and shared folders'
+    'pcsclite: smart card forwarding'
+  )
+
+  cd "ghost-$pkgver"
+  _pick \
+    usr/bin/spectre usr/bin/spectre-qt \
+    usr/share/applications/spectre-qt.desktop \
+    usr/share/icons/hicolor/256x256/apps/spectre-qt.png \
+    usr/share/pixmaps/spectre-qt.png
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING LICENSES/*.txt
+}
+
+package_libgdp() {
+  pkgdesc='Ghost Display Protocol library (static library and headers)'
+  license=(MIT)
+  depends=(libngtcp2 protobuf openssl zstd)
+
+  cd "ghost-$pkgver"
+  _pick usr/include/gdp usr/lib/libgdp.a usr/lib/pkgconfig/gdp.pc usr/share/gdp
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSES/MIT.txt
+}
+
+package_pyrowave() {
+  pkgdesc='PyroWave wavelet video codec (shared library, the commit Ghost pins)'
+  license=(MIT)
+  depends=(gcc-libs glibc vulkan-icd-loader)
+
+  install -d "$pkgdir/usr/lib"
+  cp -d --preserve=mode,timestamps,links "$srcdir"/_pyrowave/lib/libpyrowave-shared.so.* "$pkgdir/usr/lib/"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" \
+    "$srcdir/_pyrowave/share/doc/pyrowave/LICENSE" "$srcdir/_pyrowave/share/doc/pyrowave/LICENSE-Granite"
+}

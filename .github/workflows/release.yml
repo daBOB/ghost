@@ -1,0 +1,336 @@
+# Builds the packages for a release and publishes them as a GitHub
+# Release when a v* tag is pushed:
+#
+#   Ubuntu 26.04   make deb    ghostd, ghostauth, veild, spectre, libgdp-dev, libpyrowave-shared0
+#   Fedora         make rpm    the same split (packaging/rpm/ghost.spec)
+#   Arch           make arch   the same split (packaging/arch/PKGBUILD)
+#   Windows        the client, a zip of spectre, spectre-qt and their DLLs
+#   macOS          the client, Spectre.app in a .dmg (packaging/macos/bundle.sh)
+#
+# Each Linux package is built in a clean container of the release it is
+# for, from its declared build dependencies alone, as an ordinary user.
+# The tag must match the version in CMakeLists.txt and debian/changelog.
+#
+# Run by hand (workflow_dispatch) it builds everything and leaves the
+# packages as the run's artifacts, without a release. A run on main also
+# warms the vcpkg caches that tag runs can read, which saves hours on the
+# first tag after a dependency change.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Check the version
+        id: version
+        run: |
+          version=$(sed -n 's/^project(ghost VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          deb=$(sed -n '1s/^ghost (\([^)]*\)).*/\1/p' debian/changelog)
+          if [ "$deb" != "$version" ]; then
+            echo "::error::debian/changelog is at $deb, CMakeLists.txt at $version"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but CMakeLists.txt is at $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  deb:
+    name: Ubuntu 26.04 (.deb)
+    needs: version
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # git before the checkout, or it fetches a tarball without .git.
+      - name: Install packaging tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git dpkg-dev sudo
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: apt-get build-dep -y ./
+
+      # As the image's ordinary user: build-pyrowave.sh takes root for a
+      # system install. dpkg-buildpackage writes into the parent directory.
+      - name: Build
+        run: |
+          chown -R ubuntu: "$GITHUB_WORKSPACE/.."
+          sudo -H -u ubuntu git config --global --add safe.directory '*'
+          sudo -H -u ubuntu make deb
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: target/*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: Fedora (.rpm)
+    needs: version
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      # x264 and the FFmpeg ghost.spec links come from RPM Fusion (free).
+      - name: Install packaging tools
+        run: |
+          dnf install -y git-core make tar rpm-build sudo 'dnf-command(builddep)'
+          dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # The spec's Version comes from a macro `make rpm` defines.
+      - name: Install build dependencies
+        run: dnf builddep -y --define "ghost_version ${{ needs.version.outputs.version }}" packaging/rpm/ghost.spec
+
+      - name: Build
+        run: |
+          useradd -m builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          sudo -H -u builder git config --global --add safe.directory '*'
+          sudo -H -u builder make rpm
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: |
+            target/*.rpm
+            !target/*-debuginfo-*
+            !target/*-debugsource-*
+          if-no-files-found: error
+
+  arch:
+    name: Arch (.pkg.tar.zst)
+    needs: version
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      # makepkg refuses to run as root; --syncdeps installs the makedepends
+      # through sudo.
+      - name: Install packaging tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git sudo
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          chown -R builder: "$GITHUB_WORKSPACE"
+          sudo -H -u builder git config --global --add safe.directory '*'
+          sudo -H -u builder make arch MAKEPKG_FLAGS=--syncdeps
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: |
+            target/*.pkg.tar.zst
+            !target/*-debug-*
+          if-no-files-found: error
+
+  # The client, as packaging/windows/README.md builds it, with vcpkg's
+  # release-only triplet (each port built once). build\bin already runs
+  # on its own; the zip takes the two executables, the DLLs vcpkg copied
+  # next to them, Qt's platform plugin and the MSVC runtime, so it needs
+  # no redistributable installed.
+  windows:
+    name: Windows client (.zip)
+    needs: version
+    runs-on: windows-2022
+    env:
+      PACKAGE: ghost-client-${{ needs.version.outputs.version }}-windows-x64
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up vcpkg
+        id: vcpkg
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          key-prefix: vcpkg-windows-x64
+          files-hash: ${{ hashFiles('packaging/windows/vcpkg.json', 'packaging/windows/vcpkg-configuration.json', 'packaging/windows/ports/**') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          "-DVCPKG_MANIFEST_DIR=$env:GITHUB_WORKSPACE/packaging/windows"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-release
+          -DVCPKG_HOST_TRIPLET=x64-windows-release
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-key }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          $out = "dist/$env:PACKAGE"
+          New-Item -ItemType Directory -Force "$out/platforms" | Out-Null
+          Copy-Item build/bin/spectre.exe, build/bin/spectre-qt.exe, build/bin/*.dll $out
+          Copy-Item build/bin/platforms/*.dll "$out/platforms"
+          Copy-Item "$env:VCToolsRedistDir/x64/Microsoft.VC143.CRT/*.dll" $out
+          Copy-Item COPYING "$out/COPYING.txt"
+          Compress-Archive -Path $out -DestinationPath "dist/$env:PACKAGE.zip"
+
+      # From the staged copy, away from build\bin: a DLL the zip lacks
+      # fails here rather than on someone's machine.
+      - name: Smoke test
+        run: |
+          & "dist/$env:PACKAGE/spectre.exe" --probe-decoders
+          if ($LASTEXITCODE -ne 0) { throw "spectre.exe exited with $LASTEXITCODE" }
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # The client, as the CI job builds it, bundled into a self-contained
+  # Spectre.app by packaging/macos/bundle.sh. Signed ad hoc and not
+  # notarized: Gatekeeper asks before the first start.
+  macos:
+    name: macOS client (.dmg)
+    needs: version
+    runs-on: macos-14
+    env:
+      PACKAGE: ghost-client-${{ needs.version.outputs.version }}-macos-arm64
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install nasm ninja pkgconf
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          cache: true
+
+      - name: Set up vcpkg
+        id: vcpkg
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          key-prefix: vcpkg-macos-arm64
+          files-hash: ${{ hashFiles('packaging/macos/vcpkg.json', 'packaging/macos/triplets/*') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_MANIFEST_DIR=$GITHUB_WORKSPACE/packaging/macos
+          -DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/packaging/macos/triplets
+          -DVCPKG_TARGET_TRIPLET=arm64-osx-dynamic-release
+          -DVCPKG_HOST_TRIPLET=arm64-osx-release
+          -DCMAKE_PREFIX_PATH=$QT_ROOT_DIR
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-key }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Bundle
+        run: |
+          mkdir -p dist
+          packaging/macos/bundle.sh build "dist/$PACKAGE.dmg"
+
+      # From the mounted image, with the build tree moved away: a dylib the
+      # bundle lacks fails here. The loader's log shows whether it found
+      # the bundled MoltenVK manifest.
+      - name: Smoke test
+        run: |
+          mv build build.away
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "dist/$PACKAGE.dmg"
+          VK_LOADER_DEBUG=driver "$mnt/Spectre.app/Contents/MacOS/spectre" --probe-decoders 2>&1 | tee probe.log
+          hdiutil detach "$mnt"
+          grep -q 'MoltenVK_icd.json' probe.log ||
+            echo "::warning::the Vulkan loader did not report the bundled MoltenVK manifest"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [version, deb, rpm, arch, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --title "Ghost ${{ needs.version.outputs.version }}"
+          --generate-notes
+          --verify-tag

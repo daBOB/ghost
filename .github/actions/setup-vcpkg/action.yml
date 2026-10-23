@@ -1,0 +1,69 @@
+# vcpkg at the commit every client build pins, with its binary packages
+# restored from the Actions cache: building FFmpeg, Qt and the rest from
+# scratch dominates a job otherwise. Sets VCPKG_ROOT and
+# VCPKG_DEFAULT_BINARY_CACHE for the steps after it.
+#
+# The cache is saved by the caller, right after its configure step (where
+# vcpkg builds the dependencies), so that a red build later on doesn't
+# throw the dependency build away:
+#
+#   - uses: actions/cache/save@v4
+#     if: always() && steps.vcpkg.outputs.cache-hit != 'true'
+#     with:
+#       path: .vcpkg-cache
+#       key: ${{ steps.vcpkg.outputs.cache-key }}
+name: Set up vcpkg
+description: Check out vcpkg at the pinned commit, bootstrap it, restore its binary cache
+
+inputs:
+  key-prefix:
+    description: Cache key prefix naming the platform, e.g. vcpkg-macos-arm64
+    required: true
+  files-hash:
+    description: hashFiles() of the manifest, overlay ports and triplets
+    required: true
+  commit:
+    description: The vcpkg commit
+    default: 07f4812200df3d3c931c0c8a6081d3b21fe2bf9f
+
+outputs:
+  cache-hit:
+    description: Whether the exact cache key was restored
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: The key to save the cache under
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore vcpkg binary cache
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: .vcpkg-cache
+        key: ${{ inputs.key-prefix }}-${{ inputs.commit }}-${{ inputs.files-hash }}
+        restore-keys: ${{ inputs.key-prefix }}-${{ inputs.commit }}-
+
+    # Forward slashes, which Windows' tools and Git Bash both take.
+    - name: Check out vcpkg
+      shell: bash
+      run: |
+        root="${RUNNER_TEMP//\\//}/vcpkg"
+        cache="${GITHUB_WORKSPACE//\\//}/.vcpkg-cache"
+        mkdir -p "$cache"
+        git init -q "$root"
+        git -C "$root" fetch -q --depth 1 https://github.com/microsoft/vcpkg.git "${{ inputs.commit }}"
+        git -C "$root" checkout -q FETCH_HEAD
+        echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+        echo "VCPKG_DEFAULT_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
+
+    - name: Bootstrap vcpkg
+      if: runner.os != 'Windows'
+      shell: bash
+      run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+
+    - name: Bootstrap vcpkg
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: '& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics'

@@ -5,7 +5,7 @@
 // real pcscd started by session/pcscd.hpp, loading the built reader
 // driver, relaying through session/smartcards.hpp to a fake client that
 // answers like a card, and a PC/SC program on top through libpcsclite.
-// Passes (skipped) where pcscd isn't installed.
+// Passes (skipped) where pcscd isn't installed or /run/pcscd is missing.
 #include "session/pcscd.hpp"
 #include "session/smartcards.hpp"
 
@@ -214,6 +214,13 @@ int main() {
 	std::string pcscd = wraith::PcscDaemon::find_pcscd();
 	if (pcscd.empty()) {
 		std::printf("smartcards_test: no pcscd, skipped\n");
+		return 0;
+	}
+	// ghost's tmpfiles.d makes it on a host; a package build's container or
+	// chroot has none, and pcscd can't start without it.
+	struct stat run_st;
+	if (stat("/run/pcscd", &run_st) != 0 || !S_ISDIR(run_st.st_mode)) {
+		std::printf("smartcards_test: no /run/pcscd, skipped\n");
 		return 0;
 	}
 	char root[] = "/tmp/wraith_smartcards_test.XXXXXX";

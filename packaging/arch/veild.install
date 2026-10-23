@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: 2026 Joseph Saiko <https://saiko.dev>
+# SPDX-License-Identifier: GPL-3.0-only
+
+# pacman's sysusers hook only runs after the transaction, and the keys
+# below are the veil group's to read, so the accounts are created here
+# first. The unit is left disabled, as on any Arch package.
+post_install() {
+  systemd-sysusers ghostauth.conf veild.conf
+  install -d -o veil -g veil -m 0700 /var/lib/veil
+
+  # Generated once, never replaced, and not part of the package (an upgrade
+  # must not change the lobby's identity under the clients that pinned it).
+  # The keys are readable by the veil group.
+  dir=/etc/ghost
+  host=$(hostname -f 2>/dev/null || hostname)
+  short=$(hostname -s 2>/dev/null || hostname)
+  install -d -m 0755 "$dir"
+
+  # Veil's lobby certificate, what GDP clients pin.
+  crt=$dir/veil-cert.pem
+  key=$dir/veil-key.pem
+  if [ ! -e "$crt" ] && [ ! -e "$key" ]; then
+    echo "veild: generating Veil's lobby certificate for $host"
+    if ( umask 077 && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+            -sha256 -nodes -days 36500 -subj "/CN=$host" \
+            -addext "subjectAltName=DNS:$host" -keyout "$key" -out "$crt" 2>/dev/null ); then
+      chmod 0644 "$crt"
+      chmod 0640 "$key"
+      chgrp veil "$key"
+      openssl x509 -in "$crt" -noout -fingerprint -sha256
+    else
+      rm -f "$crt" "$key"
+      echo "veild: lobby certificate generation failed" >&2
+    fi
+  fi
+
+  # The web UI's HTTPS pair: self-signed, so browsers warn until the admin
+  # points veild.toml at a real one. It names every name and address this
+  # machine has right now (inetutils' hostname has no -I; ip does).
+  crt=$dir/veil-web-cert.pem
+  key=$dir/veil-web-key.pem
+  if [ ! -e "$crt" ] && [ ! -e "$key" ]; then
+    san="DNS:$host"
+    [ "$short" = "$host" ] || san="$san,DNS:$short"
+    san="$san,DNS:localhost,IP:127.0.0.1,IP:::1"
+    for ip in $(ip -o addr show scope global 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'); do
+      san="$san,IP:$ip"
+    done
+    echo "veild: generating a self-signed web certificate for $san"
+    if ( umask 077 && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+            -sha256 -nodes -days 825 -subj "/CN=$host" -addext "subjectAltName=$san" \
+            -addext "basicConstraints=critical,CA:FALSE" \
+            -addext "keyUsage=critical,digitalSignature" \
+            -addext "extendedKeyUsage=serverAuth" -keyout "$key" -out "$crt" 2>/dev/null ); then
+      chmod 0644 "$crt"
+      chmod 0640 "$key"
+      chgrp veil "$key"
+    else
+      rm -f "$crt" "$key"
+      echo "veild: web certificate generation failed" >&2
+    fi
+  fi
+
+  # The Wisp thin clients' shared key ([thin_clients] key). Delete it and
+  # reinstall to rotate.
+  f=$dir/veil-wisp.key
+  if [ ! -e "$f" ]; then
+    echo "veild: generating the Wisp key"
+    if ( umask 077 && openssl rand -hex 32 > "$f" ); then
+      chmod 0640 "$f"
+      chgrp veil "$f"
+    else
+      rm -f "$f"
+      echo "veild: Wisp key generation failed" >&2
+    fi
+  fi
+
+  if [ "$2" = "" ]; then
+    echo "veild: enable it with"
+    echo "  systemctl enable --now ghostauth.socket veild"
+  fi
+}
+
+post_upgrade() {
+  post_install "$1" "$2"
+}

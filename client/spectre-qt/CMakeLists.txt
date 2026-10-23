@@ -50,8 +50,8 @@ if(APPLE)
     MACOSX_BUNDLE_BUNDLE_NAME "Spectre"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.ghost.spectre"
     MACOSX_BUNDLE_ICON_FILE "spectre.icns"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
-    MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
   )
   # find_spectre_binary() looks next to the launcher's own executable,
   # which inside a bundle is Contents/MacOS/ -- so that's where spectre

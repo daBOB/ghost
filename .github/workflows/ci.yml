@@ -105,19 +105,16 @@ jobs:
 
   # The client alone (libgdp, spectre, spectre-qt) on macOS -- see
   # packaging/macos/README.md. vcpkg is pinned to a known-good commit and
-  # its binary packages cached, since building FFmpeg and the rest from
-  # scratch dominates the job otherwise. The overlay triplets in
-  # packaging/macos/triplets build each port once (release only), and the
-  # cache is saved even when a later step fails, so a red run doesn't
-  # throw the dependency build away. No GPU work runs here: spectre's
-  # tests are the jitter buffer and font ones, and MoltenVK is only needed
-  # to actually present, so it isn't installed.
+  # its binary packages cached (.github/actions/setup-vcpkg), since
+  # building FFmpeg and the rest from scratch dominates the job otherwise.
+  # The overlay triplets in packaging/macos/triplets build each port once
+  # (release only), and the cache is saved even when a later step fails,
+  # so a red run doesn't throw the dependency build away. No GPU work runs
+  # here: spectre's tests are the jitter buffer and font ones, and
+  # MoltenVK is only needed to actually present, so it isn't installed.
   macos-client:
     name: macOS client (build + test)
     runs-on: macos-14
-    env:
-      VCPKG_COMMIT: 07f4812200df3d3c931c0c8a6081d3b21fe2bf9f
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -131,27 +128,18 @@ jobs:
           version: 6.8.3
           cache: true
 
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .vcpkg-cache
-          key: vcpkg-macos-arm64-${{ env.VCPKG_COMMIT }}-${{ hashFiles('packaging/macos/vcpkg.json', 'packaging/macos/triplets/*') }}
-          restore-keys: vcpkg-macos-arm64-${{ env.VCPKG_COMMIT }}-
-
       - name: Set up vcpkg
-        run: |
-          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-          git init -q "$RUNNER_TEMP/vcpkg"
-          git -C "$RUNNER_TEMP/vcpkg" fetch -q --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
-          git -C "$RUNNER_TEMP/vcpkg" checkout -q FETCH_HEAD
-          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        id: vcpkg
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          key-prefix: vcpkg-macos-arm64
+          files-hash: ${{ hashFiles('packaging/macos/vcpkg.json', 'packaging/macos/triplets/*') }}
 
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_MANIFEST_DIR=$GITHUB_WORKSPACE/packaging/macos
           -DVCPKG_OVERLAY_TRIPLETS=$GITHUB_WORKSPACE/packaging/macos/triplets
           -DVCPKG_TARGET_TRIPLET=arm64-osx-dynamic-release
@@ -159,11 +147,11 @@ jobs:
           -DCMAKE_PREFIX_PATH=$QT_ROOT_DIR
 
       - name: Save vcpkg binary cache
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always() && steps.vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .vcpkg-cache
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+          key: ${{ steps.vcpkg.outputs.cache-key }}
 
       - name: Build
         run: cmake --build build
