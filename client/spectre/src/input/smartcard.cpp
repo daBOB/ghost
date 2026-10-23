@@ -58,21 +58,31 @@ constexpr bool kPnpNotification = true;
 #endif
 const char *const kPnpReader = "\\\\?PnP?\\Notification";
 
+// PC/SC's return codes, compared as the 32-bit values they are: macOS
+// has LONG as int32_t and the codes as unsigned literals past INT_MAX,
+// pcsclite a 64-bit long holding them positive, Windows a 32-bit long.
+constexpr uint32_t code(LONG rv) {
+	return (uint32_t)rv;
+}
+template <typename Code> constexpr bool is(LONG rv, Code expected) {
+	return code(rv) == (uint32_t)expected;
+}
+
 int error_for(LONG rv) {
-	switch (rv) {
-	case SCARD_E_NO_SMARTCARD:
-	case SCARD_W_REMOVED_CARD:
-	case SCARD_E_UNKNOWN_READER:
-	case SCARD_E_READER_UNAVAILABLE:
-	case SCARD_W_UNPOWERED_CARD:
-	case SCARD_W_UNRESPONSIVE_CARD: return gdp::session::SMARTCARD_ERROR_NO_CARD;
-	case SCARD_E_SHARING_VIOLATION: return gdp::session::SMARTCARD_ERROR_BUSY;
+	switch (code(rv)) {
+	case (uint32_t)SCARD_E_NO_SMARTCARD:
+	case (uint32_t)SCARD_W_REMOVED_CARD:
+	case (uint32_t)SCARD_E_UNKNOWN_READER:
+	case (uint32_t)SCARD_E_READER_UNAVAILABLE:
+	case (uint32_t)SCARD_W_UNPOWERED_CARD:
+	case (uint32_t)SCARD_W_UNRESPONSIVE_CARD: return gdp::session::SMARTCARD_ERROR_NO_CARD;
+	case (uint32_t)SCARD_E_SHARING_VIOLATION: return gdp::session::SMARTCARD_ERROR_BUSY;
 	}
 	return gdp::session::SMARTCARD_ERROR_FAILED;
 }
 
 bool service_gone(LONG rv) {
-	return rv == SCARD_E_NO_SERVICE || rv == SCARD_E_SERVICE_STOPPED || rv == SCARD_E_INVALID_HANDLE;
+	return is(rv, SCARD_E_NO_SERVICE) || is(rv, SCARD_E_SERVICE_STOPPED) || is(rv, SCARD_E_INVALID_HANDLE);
 }
 
 // Every reader the service lists, but ghost's own: a spectre inside a
@@ -317,7 +327,7 @@ void SmartcardReaders::watch_loop() {
 		if (rv != SCARD_S_SUCCESS) {
 			// A timeout, a cancel, or a reader that left between the list
 			// and the wait: look again.
-			if (rv != SCARD_E_TIMEOUT && rv != SCARD_E_CANCELLED && rv != SCARD_E_UNKNOWN_READER) {
+			if (!is(rv, SCARD_E_TIMEOUT) && !is(rv, SCARD_E_CANCELLED) && !is(rv, SCARD_E_UNKNOWN_READER)) {
 				wait(std::chrono::milliseconds(kWatchMs));
 			}
 			continue;
@@ -459,7 +469,7 @@ void SmartcardReaders::work_loop() {
 				Open o;
 				rv = PCSC_A(SCardConnect)(ctx, r.reader.c_str(), SCARD_SHARE_EXCLUSIVE,
 					SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, &o.handle, &o.protocol);
-				if (rv == SCARD_E_SHARING_VIOLATION) {
+				if (is(rv, SCARD_E_SHARING_VIOLATION)) {
 					rv = PCSC_A(SCardConnect)(ctx, r.reader.c_str(), SCARD_SHARE_SHARED,
 						SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, &o.handle, &o.protocol);
 					o.shared = rv == SCARD_S_SUCCESS;
@@ -480,7 +490,7 @@ void SmartcardReaders::work_loop() {
 				if (rv == SCARD_S_SUCCESS && atr_len > 0 && atr_len <= gdp::kMaxAtr) {
 					e.atr.assign(reinterpret_cast<const char *>(atr), atr_len);
 				} else if (rv == SCARD_S_SUCCESS) {
-					rv = SCARD_F_UNKNOWN_ERROR;
+					rv = (LONG)SCARD_F_UNKNOWN_ERROR;
 				}
 			}
 			if (rv != SCARD_S_SUCCESS) {
@@ -505,7 +515,7 @@ void SmartcardReaders::work_loop() {
 		LONG rv = SCARD_S_SUCCESS;
 		if (o.shared && !o.in_transaction) {
 			rv = SCardBeginTransaction(o.handle);
-			if (rv == SCARD_W_RESET_CARD) {
+			if (is(rv, SCARD_W_RESET_CARD)) {
 				// Another program reset the card: what the host had
 				// selected and verified is gone either way.
 				rv = SCardReconnect(o.handle, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
@@ -541,7 +551,7 @@ void SmartcardReaders::work_loop() {
 			// Never the APDU: it may hold a PIN.
 			SLOG_ERROR("spectre: smartcard: \"%s\": transmit failed (0x%lx)", r.reader.c_str(),
 				static_cast<unsigned long>(rv));
-			e.error = error_for(rv == SCARD_S_SUCCESS ? SCARD_F_UNKNOWN_ERROR : rv);
+			e.error = error_for(rv == SCARD_S_SUCCESS ? (LONG)SCARD_F_UNKNOWN_ERROR : rv);
 			if (e.error == gdp::session::SMARTCARD_ERROR_NO_CARD) {
 				close_card(r.reader, SCARD_LEAVE_CARD);
 			}
