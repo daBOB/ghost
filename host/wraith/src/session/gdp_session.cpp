@@ -115,6 +115,17 @@ uint32_t session_refresh_hz(uint32_t refresh_mhz) {
 	return std::clamp((refresh_mhz + 500) / 1000, kMinRefreshHz, max_fps);
 }
 
+// The software encoder's frame-rate ceiling, whatever the client asked
+// for: x264 at 4K only just fits a 60 fps frame with conversion and
+// encode overlapped (X264Encoder's asynchronous mode), and push_cpu()
+// waits on the event loop's thread for a frame it hasn't finished.
+constexpr uint32_t kMaxSoftwareRefreshHz = 60;
+
+// SessionServices::encoder_name(): "software", or "software+refine".
+bool is_software_encoder(const std::string &encoder_name) {
+	return encoder_name.rfind("software", 0) == 0;
+}
+
 std::vector<std::string> to_vector(const google::protobuf::RepeatedPtrField<std::string> &field) {
 	return std::vector<std::string>(field.begin(), field.end());
 }
@@ -477,6 +488,27 @@ ColorMatrix GdpSession::session_matrix(const std::string &codec) const {
 }
 
 bool GdpSession::open_session_encoder(const std::string &codec, bool refine) {
+	if (!open_encoder_at_best_depth(codec, refine)) {
+		return false;
+	}
+	// Which backend opens is only known now, so a software one asked to
+	// run faster than it can reclocks the output and opens again.
+	SessionServices &services = host_.session();
+	uint32_t refresh_hz = host_.output_refresh_hz();
+	if (!is_software_encoder(services.encoder_name()) || refresh_hz <= kMaxSoftwareRefreshHz) {
+		return true;
+	}
+	if (!host_.request_resize(host_.output_width(), host_.output_height(), host_.output_scale(),
+			kMaxSoftwareRefreshHz)) {
+		WLOG_ERROR("gdp: software encoder at %u Hz: this session can't change the output's rate", refresh_hz);
+		return true;
+	}
+	WLOG_INFO("gdp: software encoder: output now %u Hz, not %u", host_.output_refresh_hz(), refresh_hz);
+	services.close_encoder();
+	return open_encoder_at_best_depth(codec, refine);
+}
+
+bool GdpSession::open_encoder_at_best_depth(const std::string &codec, bool refine) {
 	SessionServices &services = host_.session();
 	// [encode] bit_depth = 8 pins the baseline; "auto" asks for 10 first.
 	std::vector<uint32_t> wanted =
@@ -519,6 +551,11 @@ void GdpSession::handle_resolution_change(const gdp::session::ResolutionChange &
 		? session_refresh_hz(change.display().refresh_mhz())
 		: old_refresh_hz;
 	SessionServices &services = host_.session();
+	// Capped up front, so the output isn't reclocked twice
+	// (open_session_encoder()).
+	if (is_software_encoder(services.encoder_name())) {
+		refresh_hz = std::min(refresh_hz, kMaxSoftwareRefreshHz);
+	}
 	bool refine = gdp::has_capability(capabilities_, gdp::kCapabilityRefine);
 
 	if (change.stream_id() != kStreamId || !valid_output_size(width, height)) {

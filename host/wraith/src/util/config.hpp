@@ -123,7 +123,8 @@ struct WraithConfig {
 		double pyrowave_bpp = 1.0;
 		// The highest frame rate a client may ask for (DisplayDescriptor.
 		// refresh_mhz, gdp_session.cpp's session_refresh_hz()); a client
-		// that asks for none gets 60, or this if it is lower.
+		// that asks for none gets 60, or this if it is lower. The software
+	// encoder stops at 60 regardless (gdp_session.cpp's kMaxSoftwareRefreshHz).
 		uint32_t max_fps = 144;
 		// [encode.codecs]: which wire codecs wraith offers in negotiation
 		// (supported_video_codecs) and ranks GPUs by (render_node.cpp).

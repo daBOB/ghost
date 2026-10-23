@@ -232,7 +232,10 @@ private:
 	// Opens the encoder for `codec` at the deepest bit depth the viewer
 	// declared (codec_formats_), wraith.toml allows and a backend opens at
 	// -- 10, then 8 (gdp-spec.md §7.3). False if none opened at any depth.
+	// If the backend that opened is software, an output above
+	// kMaxSoftwareRefreshHz is brought down to it first.
 	bool open_session_encoder(const std::string &codec, bool refine);
+	bool open_encoder_at_best_depth(const std::string &codec, bool refine);
 	// The matrix a session on `codec` is coded with: BT.709 when the client
 	// negotiated "color" (gdp-spec.md §7.3), else the codec's default --
 	// BT.601 for the block codecs. PyroWave converts with its own BT.709

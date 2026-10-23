@@ -82,7 +82,8 @@
 # The highest frame rate a client may ask for (30-240). The desktop runs
 # at the rate the client asks for, up to this -- spectre asks for 60
 # unless its user picks more -- and every frame costs encoding time and
-# bandwidth, so 144 is about 2.4 times the load of 60.
+# bandwidth, so 144 is about 2.4 times the load of 60. A session on the
+# software (x264) encoder runs at 60 at most, whatever this says.
 #max_fps = 144
 
 # Which video codecs wraith offers a client; the client picks the first of
