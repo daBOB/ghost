@@ -19,6 +19,7 @@ const S = {
     [12, "keyframe_request", "KeyframeRequest"], [13, "network_profile_changed", "NetworkProfileChanged"],
     [14, "refine_pause", "RefinePause"], [15, "clipboard", "ClipboardData"], [16, "logout_request", "LogoutRequest"],
     [17, "diagnostics_request", "DiagnosticsRequest"], [18, "diagnostics_report", "DiagnosticsReport"],
+    [22, "desktop_state", "DesktopState"],
   ],
   DisplayDescriptor: [[1, "width", "uint32"], [2, "height", "uint32"], [3, "refresh_mhz", "uint32"], [4, "scale", "double"]],
   SessionHello: [
@@ -46,6 +47,7 @@ const S = {
   DiagnosticsReport: [[1, "text", "bytes"]],
   NetworkProfileChanged: [[1, "profile", "enum"]],
   RefinePause: [[1, "paused", "bool"]],
+  DesktopState: [[1, "idle_inhibited", "bool"]],
   FrameTrain: [[1, "frame_id", "uint32"], [2, "datagrams", "uint32"], [3, "bytes", "uint32"], [4, "span_us", "uint32"]],
   StreamStats: [
     [1, "stream_id", "uint32"], [2, "highest_frame_id_acked", "uint32"], [3, "loss_bitmap", "uint64"],

@@ -4,6 +4,7 @@
 #include "screencast/ext_remote_session.hpp"
 
 #include "screencast/data_control_clipboard.hpp"
+#include "screencast/ext_idle_watch.hpp"
 #include "screencast/ext_image_copy_capture.hpp"
 #include "screencast/virtual_input.hpp"
 #include "screencast/wayland_client.hpp"
@@ -335,6 +336,10 @@ std::unique_ptr<FrameSource> ExtRemoteSession::make_frame_source() {
 
 std::unique_ptr<ClipboardSink> ExtRemoteSession::make_clipboard_sink() {
 	return DataControlClipboard::create(impl_->client, impl_->config.event_loop);
+}
+
+std::unique_ptr<IdleWatch> ExtRemoteSession::make_idle_watch() {
+	return ExtIdleWatch::create(impl_->client, impl_->config.event_loop);
 }
 
 std::unique_ptr<ScreencastInput> ExtRemoteSession::make_input_sink() {

@@ -128,7 +128,8 @@ void set_sdl_hints() {
 	SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 	// SDL keeps the screen awake for as long as a window is open. A remote
 	// desktop nobody is touching is as idle as a local one, so the local
-	// screensaver and display sleep go ahead -- except after gamepad input
+	// screensaver and display sleep go ahead -- except while the remote
+	// desktop holds itself awake, and after gamepad input
 	// (note_gamepad_activity()), which the local desktop never sees.
 	SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
 }
@@ -164,6 +165,13 @@ StreamSession::StreamSession(StreamOptions options) : options_(std::move(options
 	client_.on_clipboard_text = [this](const std::string &utf8) { on_clipboard_text(utf8); };
 	client_.on_displays_changed = [this](const DisplayInfo &d) { on_displays_changed(d); };
 	client_.on_diagnostics_request = [this] { return diagnostics_text(); };
+	client_.on_desktop_state = [this](const gdp::session::DesktopState &state) {
+		if (state.idle_inhibited() != host_idle_inhibited_) {
+			SLOG_INFO("spectre: the host's desktop %s",
+				state.idle_inhibited() ? "is held awake" : "is no longer held awake");
+		}
+		host_idle_inhibited_ = state.idle_inhibited();
+	};
 	client_.on_file_list = [this](const gdp::session::FileList &list) { on_host_file_list(list); };
 	client_.on_file_fetch = [this](const gdp::session::FileFetch &fetch) { local_files_.answer(fetch); };
 	// What was sent is said once the batch is over (on_batch_done); a
@@ -754,10 +762,7 @@ void StreamSession::main_loop() {
 		if (raw_report_us > gamepad_active_us_ && now_us - raw_report_us < kGamepadIdleHoldUs) {
 			note_gamepad_activity();
 		}
-		if (idle_inhibited_ && now_us - gamepad_active_us_ >= kGamepadIdleHoldUs) {
-			idle_inhibited_ = false;
-			SDL_EnableScreenSaver();
-		}
+		update_idle_inhibit(now_us);
 		// The scroll indicators fade on a clock, not on anything arriving.
 		if (indicators_drawn_ && now_us - indicators_shown_us_ >= kIndicatorHoldUs) {
 			mark_ui_dirty();
@@ -972,6 +977,9 @@ uint32_t StreamSession::requested_refresh_mhz() const {
 void StreamSession::on_disconnected(const std::string &reason) {
 	disconnected_ = true;
 	disconnect_reason_ = reason;
+	// The desktop's hold ends with the connection (gdp-spec.md §7.13).
+	host_idle_inhibited_ = false;
+	update_idle_inhibit(gdp::monotonic_us());
 	files_.cancel_all();
 	end_upload_card();
 	local_files_.cancel_all();
@@ -1170,9 +1178,22 @@ void StreamSession::apply_clipboard_text(const std::string &utf8) {
 // its idle timer run again.
 void StreamSession::note_gamepad_activity() {
 	gamepad_active_us_ = gdp::monotonic_us();
-	if (!idle_inhibited_) {
-		idle_inhibited_ = true;
+	update_idle_inhibit(gamepad_active_us_);
+}
+
+// From main_loop() every pass, so a host's DesktopState that came before
+// the window waits for it here.
+void StreamSession::update_idle_inhibit(uint64_t now_us) {
+	bool gamepad = gamepad_active_us_ != 0 && now_us - gamepad_active_us_ < kGamepadIdleHoldUs;
+	bool want = host_idle_inhibited_ || gamepad;
+	if (want == idle_inhibited_ || !sdl_initialized_) {
+		return;
+	}
+	idle_inhibited_ = want;
+	if (want) {
 		SDL_DisableScreenSaver();
+	} else {
+		SDL_EnableScreenSaver();
 	}
 }
 

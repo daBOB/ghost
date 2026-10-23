@@ -242,6 +242,14 @@ public:
 	// What GdpSession offers on: a sink now, or the promise of one.
 	bool clipboard_available() const { return clipboard_ != nullptr || clipboard_expected_; }
 
+	// DesktopState.idle_inhibited (gdp-spec.md §7.13): whether the desktop
+	// is holding itself awake, from the screencast host's IdleWatch. Kept
+	// here, apart from any connection, so a client attaching while it is
+	// held is told at SessionAccept; a change goes to the attached session
+	// at once.
+	void set_idle_inhibited(bool inhibited);
+	bool idle_inhibited() const { return idle_inhibited_; }
+
 private:
 	// Idempotent: both -e and -l want an open encoder, and either may come
 	// first (or both -- writing to a file and streaming to a live session
@@ -337,6 +345,7 @@ private:
 	// session down explicitly before any member destructor runs anyway.
 	std::unique_ptr<ClipboardSink> clipboard_;
 	bool clipboard_expected_ = false;
+	bool idle_inhibited_ = false;
 
 	std::unique_ptr<GdpSession> gdp_session_;
 	EventSource gdp_session_source_;

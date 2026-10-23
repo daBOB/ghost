@@ -394,6 +394,10 @@ void SessionClient::handle_control_data(const uint8_t *data, size_t len) {
 			if ((file_clipboard_enabled_ || file_share_enabled_) && on_file_fetch) {
 				on_file_fetch(env.file_fetch());
 			}
+		} else if (env.has_desktop_state()) {
+			if (on_desktop_state) {
+				on_desktop_state(env.desktop_state());
+			}
 		} else if (env.has_network_profile_changed()) {
 			host_network_profile_ = network_profile_name(env.network_profile_changed().profile());
 		} else if (env.has_diagnostics_request()) {

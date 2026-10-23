@@ -50,6 +50,7 @@ public:
 	// ext-data-control-v1 if the compositor exports it (labwc/wlroots do);
 	// null otherwise.
 	std::unique_ptr<ClipboardSink> make_clipboard_sink() override;
+	std::unique_ptr<IdleWatch> make_idle_watch() override;
 	const char *name() const override { return "ext"; }
 	// True until an open() finds the compositor lacks a usable
 	// zwlr_output_manager_v1 (or rejects the mode).

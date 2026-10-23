@@ -734,6 +734,12 @@ message ControlEnvelope {
     // Support.
     DiagnosticsRequest diagnostics_request = 17;        // host -> client
     DiagnosticsReport diagnostics_report = 18;          // client -> host
+    // Files.
+    FileList file_list = 19;                            // either
+    FileFetch file_fetch = 20;                          // host -> client
+    FileShare file_share = 21;                          // client -> host
+    // The desktop.
+    DesktopState desktop_state = 22;                    // host -> client
   }
 }
 ```
@@ -1076,6 +1082,7 @@ connection MUST be ignored.
 | `FileList` | host → client; client → host | `file` and `clipboard`; client → host `file-clipboard` | §7.12 |
 | `FileFetch` | host → client | `file-clipboard` or `file-share` | §7.12 |
 | `FileShare` | client → host | `file-share` | §7.12 |
+| `DesktopState` | host → client | | §7.13 |
 
 `NetworkProfileChanged` has one field, `profile` (1, `NetworkProfile`).
 
@@ -1676,6 +1683,28 @@ text. The reference client mounts the host's
 copied files the same way under `$XDG_RUNTIME_DIR/spectre/<pid>`; on
 Windows, which has no FUSE, it offers them on the clipboard as
 Explorer's virtual files and fetches each when it is pasted.
+
+### 7.13 Desktop state
+
+`DesktopState` (host → client) describes what the desktop is doing that
+the client may act on. Each one carries every field the host knows, so
+the latest replaces the last: the host sends one after `SessionAccept`
+and another on each change. Every field is a hint whose default (false)
+means "not so", so a field a host does not know arrives as the safe
+answer. It is not acknowledged, and repeating the current state does
+nothing. It needs no capability: a client that does not know it ignores
+it (§16), and a client ignores fields it does not know.
+
+| # | Field | Type | Meaning |
+|---|---|---|---|
+| 1 | `idle_inhibited` | bool | An application in the desktop is holding it awake: a video player while it plays, a game, a presentation. |
+
+**`idle_inhibited`.** While it is true, the client SHOULD keep its own
+display awake (no screensaver, no display sleep) as the local desktop's
+own inhibitors would, and MUST stop when it turns false or the
+connection closes. How the host learns of it is its own (the reference
+host asks the compositor), and it MAY report a change late, by up to a
+few seconds after the last input.
 
 ---
 
@@ -2859,7 +2888,7 @@ Registries, all lowercase tokens unless stated:
 | Datagram channels | §3.2 | 0x01 video, 0x02 audio, 0x03 microphone |
 | Video codecs | §6.6 | `h264`, `h265`, `av1`, `pyrowave` |
 | Audio codecs | §6.8 | `opus` |
-| Capabilities | §6.7 | `clipboard`, `refine`, `gamepad`, `hid`, `microphone`, `file`, `file-clipboard`, `file-share`; `usb` reserved |
+| Capabilities | §6.7 | `clipboard`, `color`, `refine`, `gamepad`, `hid`, `microphone`, `file`, `file-clipboard`, `file-share`, `security-key`, `smartcard`; `usb` reserved |
 | Stream kinds | §2.2 | `file`; `usb` reserved |
 | Clipboard MIME types | §7.9 | `text/plain` |
 | Refinement tile formats | §9.5 | 0 `BGR8` |

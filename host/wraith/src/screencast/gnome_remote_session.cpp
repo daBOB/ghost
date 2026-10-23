@@ -5,6 +5,7 @@
 
 #include "screencast/ei_input.hpp"
 #include "screencast/gnome_clipboard.hpp"
+#include "screencast/gnome_idle_watch.hpp"
 #include "screencast/pipewire_capture.hpp"
 #include "screencast/sdbus_util.hpp"
 #include "util/clock.hpp"
@@ -583,6 +584,10 @@ std::unique_ptr<FrameSource> GnomeRemoteSession::make_frame_source() {
 
 std::unique_ptr<ClipboardSink> GnomeRemoteSession::make_clipboard_sink() {
 	return GnomeClipboard::create(impl_->bus, impl_->rd_path, impl_->config.event_loop);
+}
+
+std::unique_ptr<IdleWatch> GnomeRemoteSession::make_idle_watch() {
+	return GnomeIdleWatch::create(impl_->bus);
 }
 
 std::unique_ptr<ScreencastInput> GnomeRemoteSession::make_input_sink() {

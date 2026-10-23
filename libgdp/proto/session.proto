@@ -45,6 +45,8 @@ message ControlEnvelope {
     FileFetch file_fetch = 20;
     // file-share: a folder the client shares with the host, or stops sharing.
     FileShare file_share = 21;
+    // What the desktop is doing that the client may act on (§7.13).
+    DesktopState desktop_state = 22;
   }
 }
 
@@ -426,6 +428,16 @@ message NetworkProfileChanged {
 // layer and then empty ones. Every connection starts unpaused.
 message RefinePause {
   bool paused = 1;
+}
+
+// wraith -> spectre (gdp-spec.md §7.13): the desktop's state, every field
+// each time -- once after SessionAccept, then on each change. Hints, all
+// false by default, so a field a host doesn't know arrives as "not so".
+// Needs no capability: a client that doesn't know it changes nothing.
+message DesktopState {
+  // An application in the desktop is holding it awake (a video playing, a
+  // game): the client keeps its own display awake meanwhile.
+  bool idle_inhibited = 1;
 }
 
 // wraith -> spectre: send a DiagnosticsReport (gdp-spec.md §7.11). Sent

@@ -156,6 +156,11 @@ private:
 	std::unique_ptr<RemoteSession> remote_session_;
 	std::unique_ptr<FrameSource> frame_source_;
 	std::unique_ptr<ScreencastInput> input_;
+	// Feeds SessionServices::set_idle_inhibited(); one per RemoteSession
+	// open, null when the compositor can't say.
+	std::unique_ptr<IdleWatch> idle_watch_;
+	void open_idle_watch();
+	void close_idle_watch();
 	InputProxy input_proxy_;
 	FrameHold frame_hold_;
 	bool remote_session_ready_ = false;

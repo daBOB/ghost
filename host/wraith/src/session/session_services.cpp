@@ -59,6 +59,16 @@ void SessionServices::set_clipboard(std::unique_ptr<ClipboardSink> clipboard) {
 	}
 }
 
+void SessionServices::set_idle_inhibited(bool inhibited) {
+	if (inhibited == idle_inhibited_) {
+		return;
+	}
+	idle_inhibited_ = inhibited;
+	if (gdp_session_) {
+		gdp_session_->send_desktop_state();
+	}
+}
+
 const std::vector<std::string> &SessionServices::supported_video_codecs() {
 	return wraith::supported_video_codecs();
 }

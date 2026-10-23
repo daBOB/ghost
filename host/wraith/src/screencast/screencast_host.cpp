@@ -62,6 +62,7 @@ ScreencastHost::~ScreencastHost() {
 	if (session_) {
 		session_->set_clipboard(nullptr);
 	}
+	idle_watch_.reset(); // likewise
 	remote_session_.reset();
 	// Before session_.reset(): see SessionServices::close_gdp_session().
 	if (session_) {
@@ -200,6 +201,7 @@ bool ScreencastHost::try_open_capture_and_input() {
 			WLOG_INFO("screencast: %s exposes no clipboard mechanism, clipboard sync is off",
 				remote_session_->name());
 		}
+		open_idle_watch();
 	}
 
 	// Not while paused: no viewer is attached (set_capture_paused()).
@@ -623,10 +625,28 @@ void ScreencastHost::close_capture_and_input() {
 	// Before the RemoteSession closes, as in the destructor: the sink holds
 	// its Wayland connection or sd-bus. The next open() makes a new one.
 	session_->set_clipboard(nullptr);
+	close_idle_watch();
 	remote_session_->close();
 	remote_session_ready_ = false;
 	cursor_hidden_ = true;
 	cursor_argb_.clear();
+}
+
+void ScreencastHost::open_idle_watch() {
+	idle_watch_ = remote_session_->make_idle_watch();
+	if (!idle_watch_) {
+		return;
+	}
+	idle_watch_->on_changed = [this](bool inhibited) { session_->set_idle_inhibited(inhibited); };
+	session_->set_idle_inhibited(idle_watch_->inhibited());
+}
+
+void ScreencastHost::close_idle_watch() {
+	idle_watch_.reset();
+	// The next watch starts from nothing held (a resize's reopen) and says
+	// so only on a change; a client told false meanwhile is at its
+	// keyboard anyway, having just asked for the new size.
+	session_->set_idle_inhibited(false);
 }
 
 void ScreencastHost::close_capture() {

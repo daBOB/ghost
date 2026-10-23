@@ -166,6 +166,11 @@ public:
 	// output (see session.proto). No-op if !active().
 	void send_cursor_position(double x, double y);
 
+	// Sends DesktopState (gdp-spec.md §7.13), all of it, from
+	// SessionServices: once after SessionAccept, then from SessionServices
+	// on each change. No-op if !active().
+	void send_desktop_state();
+
 	// Sends the local clipboard's text as ClipboardData (gdp-spec.md §7.9).
 	// No-op unless a session is active *and* negotiated the
 	// "clipboard" capability, or when `utf8` is empty, over the size cap,

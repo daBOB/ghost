@@ -13,6 +13,7 @@
 #pragma once
 
 #include "screencast/frame_source.hpp"
+#include "screencast/idle_watch.hpp"
 #include "session/clipboard_sync.hpp"
 #include "session/session_host.hpp"
 
@@ -90,6 +91,11 @@ public:
 	// reconnect path, a dropped clipboard goes with the whole session.
 	// The default is "no mechanism", so a backend opts in by overriding.
 	virtual std::unique_ptr<ClipboardSink> make_clipboard_sink() { return nullptr; }
+	// Valid after open() returned true, and asked for once per open() like
+	// the clipboard sink: whether the desktop is holding itself awake
+	// (screencast/idle_watch.hpp). Null when the compositor can't say --
+	// the client's display then sleeps as it would anyway.
+	virtual std::unique_ptr<IdleWatch> make_idle_watch() { return nullptr; }
 	// For log lines: the compositor's name ("mutter", "kwin", ...).
 	virtual const char *name() const = 0;
 	// Whether open() makes the compositor's output Config's width x height

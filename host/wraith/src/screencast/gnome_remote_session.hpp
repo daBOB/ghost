@@ -46,6 +46,7 @@ public:
 	// The clipboard methods on this same RemoteDesktop.Session object
 	// (screencast/gnome_clipboard.hpp). Null if EnableClipboard fails.
 	std::unique_ptr<ClipboardSink> make_clipboard_sink() override;
+	std::unique_ptr<IdleWatch> make_idle_watch() override;
 	// RecordVirtual's monitor takes the size wraith's PipeWire stream asks
 	// for, so a new size needs a new screencast, not a new GNOME.
 	// Relaunching the whole session can't work: the new

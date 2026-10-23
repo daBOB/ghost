@@ -80,6 +80,10 @@ set(WRAITH_CLIENT_PROTOCOL_XMLS
 	# older zwlr_ one: kwin 6.6 exports only this one, while labwc/wlroots
 	# export both.
 	"${WAYLAND_PROTOCOLS_DIR}/staging/ext-data-control/ext-data-control-v1.xml"
+	# Whether the desktop holds itself awake, for screencast-ext and
+	# screencast-kwin (src/screencast/ext_idle_watch.*), which needs the
+	# XML's version 2 (get_input_idle_notification).
+	"${WAYLAND_PROTOCOLS_DIR}/staging/ext-idle-notify/ext-idle-notify-v1.xml"
 	# Only because ext-image-capture-source's toplevel source manager
 	# references ext_foreign_toplevel_handle_v1's interface table; unused.
 	"${WAYLAND_PROTOCOLS_DIR}/staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml"
@@ -198,6 +202,9 @@ add_executable(wraith
   src/screencast/ext_remote_session.cpp
   src/screencast/data_control_clipboard.cpp
   src/screencast/gnome_clipboard.cpp
+  src/screencast/idle_watch.cpp
+  src/screencast/ext_idle_watch.cpp
+  src/screencast/gnome_idle_watch.cpp
   src/screencast/screencast_host.cpp
   src/util/config.cpp
   src/util/log.cpp

@@ -26,6 +26,7 @@
 namespace gdp::session {
 class ClipboardData;
 class ControlEnvelope;
+class DesktopState;
 class FileFetch;
 class FileList;
 class HidConnect;
@@ -232,6 +233,9 @@ public:
 	// answer with, which SessionClient trims to the size cap. Unset, the
 	// request is ignored.
 	std::function<std::string()> on_diagnostics_request;
+	// Fires on DesktopState (gdp-spec.md §7.13): the remote desktop's state,
+	// all of it -- once after SessionAccept, then on each change.
+	std::function<void(const gdp::session::DesktopState &state)> on_desktop_state;
 
 	// Input events (gdp-spec.md §8). No-ops before SessionAccept.
 	void send_key(uint32_t hid_usage, bool pressed);

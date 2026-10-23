@@ -5,6 +5,7 @@
 
 #include "screencast/data_control_clipboard.hpp"
 #include "screencast/ei_input.hpp"
+#include "screencast/ext_idle_watch.hpp"
 #include "screencast/kwin_output_size.hpp"
 #include "screencast/pipewire_capture.hpp"
 #include "screencast/sdbus_util.hpp"
@@ -275,6 +276,10 @@ std::unique_ptr<FrameSource> KwinRemoteSession::make_frame_source() {
 
 std::unique_ptr<ClipboardSink> KwinRemoteSession::make_clipboard_sink() {
 	return DataControlClipboard::create(impl_->client, impl_->config.event_loop);
+}
+
+std::unique_ptr<IdleWatch> KwinRemoteSession::make_idle_watch() {
+	return ExtIdleWatch::create(impl_->client, impl_->config.event_loop);
 }
 
 std::unique_ptr<ScreencastInput> KwinRemoteSession::make_input_sink() {

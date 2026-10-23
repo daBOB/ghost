@@ -906,6 +906,8 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 
 	send_control(accept_env);
 
+	send_desktop_state();
+
 	// After SessionAccept: the client only starts acting on ClipboardData
 	// once it knows the capability is in effect, and the initial push
 	// below is an ordinary ClipboardData.
@@ -1670,6 +1672,15 @@ void GdpSession::send_cursor_position(double x, double y) {
 	auto *pos = env.mutable_cursor_position();
 	pos->set_x(x);
 	pos->set_y(y);
+	send_control(env);
+}
+
+void GdpSession::send_desktop_state() {
+	if (!authenticated_) {
+		return;
+	}
+	gdp::session::ControlEnvelope env;
+	env.mutable_desktop_state()->set_idle_inhibited(host_.session().idle_inhibited());
 	send_control(env);
 }
 

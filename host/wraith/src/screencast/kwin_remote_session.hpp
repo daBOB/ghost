@@ -49,6 +49,7 @@ public:
 	// exports ext_data_control_manager_v1 (and only that variant, not the
 	// older zwlr_ one). Null on a kwin that doesn't.
 	std::unique_ptr<ClipboardSink> make_clipboard_sink() override;
+	std::unique_ptr<IdleWatch> make_idle_watch() override;
 	const char *name() const override { return "kwin"; }
 	bool sizes_output_on_open() const override { return true; }
 

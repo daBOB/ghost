@@ -416,6 +416,7 @@ private:
 	// snapshot for it, however many SDL events the poll batch held.
 	void mark_gamepad_dirty(uint32_t instance_id);
 	void note_gamepad_activity();
+	void update_idle_inhibit(uint64_t now_us);
 	// Once per main-loop iteration, after the SDL queue is drained: a full
 	// GamepadState for every dirty slot. Coalescing per batch rather than
 	// per event keeps a stick's stream of motion events to at most one
@@ -746,11 +747,14 @@ private:
 	// the host refused, which is not asked for again.
 	uint64_t follow_due_us_ = 0;
 	uint32_t refused_width_ = 0, refused_height_ = 0;
-	// The screen is held awake after gamepad input (note_gamepad_activity())
-	// until kGamepadIdleHoldUs have passed without any.
+	// The screen is held awake while the host's desktop holds itself awake
+	// (DesktopState.idle_inhibited), and after gamepad input (note_gamepad_activity())
+	// until kGamepadIdleHoldUs have passed without any. update_idle_inhibit()
+	// applies the two.
 	static constexpr uint64_t kGamepadIdleHoldUs = 60 * 1000000ull;
 	static constexpr int16_t kGamepadActiveAxis = 8000;
 	bool idle_inhibited_ = false;
+	bool host_idle_inhibited_ = false;
 	uint64_t gamepad_active_us_ = 0;
 	// The last input report from any raw controller, written by their
 	// reader threads: a raw controller never raises SDL gamepad events,

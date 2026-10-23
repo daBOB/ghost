@@ -171,6 +171,7 @@ export class Session {
       this.profile = env.network_profile_changed.profile;
       return;
     }
+    if (env.desktop_state) return this.holdAwake(!!env.desktop_state.idle_inhibited);
   }
 
   async accept(a) {
@@ -507,11 +508,47 @@ export class Session {
     if (this.onLossless) this.onLossless(on);
   }
 
+  // gdp-spec.md §7.13: while the host's desktop holds itself awake, so does
+  // this screen, through the Screen Wake Lock API. The browser drops the
+  // lock whenever the tab is hidden, so it is taken again on coming back.
+  holdAwake(held) {
+    this.awakeWanted = held && !this.ended;
+    if (!this.awakeWanted) {
+      if (this.wakeLock) this.wakeLock.release().catch(() => {});
+      this.wakeLock = null;
+      return;
+    }
+    if (!this.onVisible) {
+      this.onVisible = () => {
+        if (document.visibilityState === "visible" && this.awakeWanted) this.holdAwake(true);
+      };
+      document.addEventListener("visibilitychange", this.onVisible);
+    }
+    if (this.wakeLock || this.wakeLockPending || !navigator.wakeLock || document.visibilityState !== "visible") return;
+    this.wakeLockPending = true;
+    navigator.wakeLock.request("screen").then((lock) => {
+      this.wakeLockPending = false;
+      if (!this.awakeWanted) {
+        lock.release().catch(() => {});
+        return;
+      }
+      this.wakeLock = lock;
+      lock.addEventListener("release", () => {
+        if (this.wakeLock === lock) this.wakeLock = null;
+      });
+    }, (e) => {
+      this.wakeLockPending = false;
+      log.info(`screen wake lock refused: ${e.message}`);
+    });
+  }
+
   end(code) {
     if (this.ended) return;
     this.ended = true;
     for (const t of this.timers) clearInterval(t);
     if (this.onFocus) window.removeEventListener("focus", this.onFocus);
+    this.holdAwake(false);
+    if (this.onVisible) document.removeEventListener("visibilitychange", this.onVisible);
     if (this.input) {
       this.input.setCaptured(false);
       this.input.detach();
