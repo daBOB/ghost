@@ -60,15 +60,19 @@ public:
 	// The output scale request_resize() last set; 0 when wraith leaves the
 	// scale to the desktop (wraith.toml's display.client_scale off).
 	virtual double output_scale() const = 0;
+	// The frame rate request_resize() last set, in whole Hz: what the
+	// compositor's output is asked to refresh at and the encoder is
+	// opened for. 60 until a client asks for another.
+	virtual uint32_t output_refresh_hz() const = 0;
 
-	// SessionHello.displays or a ResolutionChange asked for a size or a
-	// scale other than the current one (gdp_session.cpp). ScreencastHost
-	// reopens capture against the running compositor at the new size and
-	// scale, or declines if that compositor can't resize
-	// (screencast_host.hpp). `scale` 0 leaves the desktop's own. False
-	// means nothing changed; callers re-read output_width()/
-	// output_height() either way.
-	virtual bool request_resize(uint32_t width, uint32_t height, double scale) = 0;
+	// SessionHello.displays or a ResolutionChange asked for a size, a
+	// scale or a refresh rate other than the current one
+	// (gdp_session.cpp). ScreencastHost reopens capture against the
+	// running compositor in the new mode, or declines if that compositor
+	// can't change it (screencast_host.hpp). `scale` 0 leaves the
+	// desktop's own. False means nothing changed; callers re-read
+	// output_width()/output_height()/output_refresh_hz() either way.
+	virtual bool request_resize(uint32_t width, uint32_t height, double scale, uint32_t refresh_hz) = 0;
 
 	// Encodes the current picture again, even with no organic damage, on a
 	// desktop that has gone still: SessionServices skipped a frame while

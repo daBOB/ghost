@@ -44,16 +44,26 @@
           <widget class="QComboBox" name="scaleCombo" />
          </item>
          <item row="2" column="0">
+          <widget class="QLabel" name="refreshRateLabel">
+           <property name="text">
+            <string>Frame rate:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QComboBox" name="refreshRateCombo" />
+         </item>
+         <item row="3" column="0">
           <widget class="QLabel" name="viewLabel">
            <property name="text">
             <string>View:</string>
            </property>
           </widget>
          </item>
-         <item row="2" column="1">
+         <item row="3" column="1">
           <widget class="QComboBox" name="viewCombo" />
          </item>
-         <item row="3" column="0" colspan="2">
+         <item row="4" column="0" colspan="2">
           <widget class="QCheckBox" name="followWindowCheck">
            <property name="text">
             <string>Resize the remote desktop with the window</string>
@@ -66,7 +76,7 @@
            </property>
           </widget>
          </item>
-         <item row="4" column="0" colspan="2">
+         <item row="5" column="0" colspan="2">
           <widget class="QCheckBox" name="fullscreenCheck">
            <property name="text">
             <string>Start fullscreen</string>

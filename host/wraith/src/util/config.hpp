@@ -99,9 +99,9 @@ struct WraithConfig {
 	RefineSettings refine_for(LinkProfile profile) const;
 
 	struct Encode {
-		// Frames between periodic keyframes (EncoderConfig::gop_size says
-		// why so many); 0 sends none but the ones asked for.
-		uint32_t gop = 600;
+		// Frames between periodic keyframes; 0, the default, sends none but
+		// the ones asked for (EncoderConfig::gop_size says why).
+		uint32_t gop = 0;
 		// The rate controller's ceiling (RateController), and the bitrate
 		// the encoder opens at; wraith -b overrides it.
 		uint32_t max_bitrate_mbps = 80;
@@ -116,11 +116,15 @@ struct WraithConfig {
 		// session's codec and a backend opens at it, else 8; 8 forces the
 		// 8-bit baseline for every session.
 		uint32_t bit_depth = 0;
-		// PyroWave's ceiling, in bits per output pixel at 60 fps: where a
+		// PyroWave's ceiling, in bits per output pixel per frame: where a
 		// pyrowave session's rate controller tops out instead of
 		// max_bitrate_mbps (SessionServices::encode_bitrate_bps()). 1.0 is
-		// where dense text stops showing halos -- ~500 Mbit/s at 4K.
+		// where dense text stops showing halos -- ~500 Mbit/s at 4K60.
 		double pyrowave_bpp = 1.0;
+		// The highest frame rate a client may ask for (DisplayDescriptor.
+		// refresh_mhz, gdp_session.cpp's session_refresh_hz()); a client
+		// that asks for none gets 60, or this if it is lower.
+		uint32_t max_fps = 144;
 		// [encode.codecs]: which wire codecs wraith offers in negotiation
 		// (supported_video_codecs) and ranks GPUs by (render_node.cpp).
 		// AV1 and PyroWave are off by default; PyroWave is never used to

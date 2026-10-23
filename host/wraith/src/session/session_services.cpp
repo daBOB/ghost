@@ -67,7 +67,8 @@ uint32_t SessionServices::encode_bitrate_bps() const {
 	if (session_codec_ != gdp::VideoCodec::Pyrowave) {
 		return encode_bitrate_bps_;
 	}
-	double bps = config().encode.pyrowave_bpp * host_.output_width() * host_.output_height() * 60.0;
+	double bps = config().encode.pyrowave_bpp * host_.output_width() * host_.output_height() *
+		host_.output_refresh_hz();
 	return (uint32_t)std::min(bps, (double)UINT32_MAX);
 }
 
@@ -105,7 +106,7 @@ bool SessionServices::ensure_encoder() {
 	config.width = host_.output_width();
 	config.height = host_.output_height();
 	config.bitrate_bps = encode_bitrate_bps();
-	config.framerate_num = 60;
+	config.framerate_num = host_.output_refresh_hz();
 	config.framerate_den = 1;
 	config.gop_size = encode_gop_size_;
 	config.drm_fd = host_.render_drm_fd();
@@ -541,8 +542,9 @@ void SessionServices::service_idle_pump(TileSource *tiles) {
 }
 
 void SessionServices::arm_idle_pump_timer() {
-	// One 60 Hz frame per tick. tile_tracker.hpp's settle_us is measured
-	// in time, so the tick rate only bounds how late a due tile goes out:
+	// One 60 Hz frame per tick, whatever the session's frame rate.
+	// tile_tracker.hpp's settle_us is measured in time, so the tick rate
+	// only bounds how late a due tile goes out:
 	// with an 80 ms settle, text lands exact 80-96 ms after the last
 	// keystroke. A tick with nothing due hashes nothing and encodes
 	// nothing, and the timer only runs while there is still something to

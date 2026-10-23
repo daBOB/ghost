@@ -9,7 +9,9 @@
 #include <kde-output-management-v2-client-protocol.h>
 #include <wayland-client-core.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <unistd.h>
 #include <vector>
@@ -28,8 +30,10 @@ constexpr uint32_t kRegistryVersion = 21;
 // live; polled in short round trips for up to this long.
 constexpr int kApplyWaitTicks = 100;
 constexpr useconds_t kApplyWaitTickUs = 10'000;
-// Used only if kwin reports no refresh for the current mode.
-constexpr uint32_t kDefaultRefreshMilliHz = 60'000;
+// How far a mode's refresh may be from the one asked for and still be it:
+// a custom mode's refresh can come back as computed from its timings
+// (60 Hz CVT is 59.96), and the rates a client asks for are far apart.
+constexpr int32_t kRefreshToleranceMilliHz = 1000;
 
 // Event opcodes, in protocol XML order. The objects below are dispatched
 // through wl_proxy_add_dispatcher instead of listeners: a listener has to
@@ -151,18 +155,22 @@ struct Sizer {
 		return 0;
 	}
 
-	Mode *find(uint32_t width, uint32_t height) const {
+	static bool is(const Mode &m, uint32_t width, uint32_t height, uint32_t refresh_mhz) {
+		return !m.removed && (uint32_t)m.width == width && (uint32_t)m.height == height &&
+			std::abs(m.refresh - (int32_t)refresh_mhz) <= kRefreshToleranceMilliHz;
+	}
+
+	Mode *find(uint32_t width, uint32_t height, uint32_t refresh_mhz) const {
 		for (const auto &m : modes) {
-			if (!m->removed && (uint32_t)m->width == width && (uint32_t)m->height == height) {
+			if (is(*m, width, height, refresh_mhz)) {
 				return m.get();
 			}
 		}
 		return nullptr;
 	}
 
-	bool current_is(uint32_t width, uint32_t height) const {
-		return current && !current->removed && (uint32_t)current->width == width &&
-			(uint32_t)current->height == height;
+	bool current_is(uint32_t width, uint32_t height, uint32_t refresh_mhz) const {
+		return current && is(*current, width, height, refresh_mhz);
 	}
 
 	// Applies and destroys `cfg`; the device's own update (new modes, the
@@ -194,10 +202,15 @@ std::string size_text(uint32_t width, uint32_t height) {
 	return std::to_string(width) + "x" + std::to_string(height);
 }
 
+std::string mode_text(uint32_t width, uint32_t height, uint32_t refresh_mhz) {
+	return size_text(width, height) + "@" + std::to_string((refresh_mhz + 500) / 1000);
+}
+
 } // namespace
 
 bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height, double scale,
-	std::string *error) {
+	uint32_t refresh_hz, std::string *error) {
+	const uint32_t refresh_mhz = refresh_hz * 1000;
 	if (!client.has_global(kde_output_management_v2_interface.name)) {
 		*error = "kwin does not advertise kde_output_management_v2 to wraith -- check the desktop-file trust "
 				 "rule (packaging/desktop/wraith.desktop.in: X-KDE-Wayland-Interfaces= must list it)";
@@ -234,7 +247,7 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 		return false;
 	}
 	auto scale_off = [&] { return scale > 0.0 && std::fabs(s.scale - scale) > 0.001; };
-	if (s.current_is(width, height) && !scale_off()) {
+	if (s.current_is(width, height, refresh_mhz) && !scale_off()) {
 		return true;
 	}
 
@@ -248,41 +261,42 @@ bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height
 		return false;
 	}
 
-	Mode *target = s.current_is(width, height) ? s.current : s.find(width, height);
+	const std::string mode = mode_text(width, height, refresh_mhz);
+	Mode *target = s.current_is(width, height, refresh_mhz) ? s.current : s.find(width, height, refresh_mhz);
 	if (!target) {
 		// set_custom_modes replaces the output's whole custom list, so the
-		// size from an earlier resize doesn't pile up beside this one.
-		uint32_t refresh =
-			s.current && s.current->refresh > 0 ? (uint32_t)s.current->refresh : kDefaultRefreshMilliHz;
+		// mode from an earlier resize doesn't pile up beside this one.
 		struct kde_mode_list_v2 *list = kde_output_management_v2_create_mode_list(s.management);
 		kde_mode_list_v2_set_resolution(list, width, height);
-		kde_mode_list_v2_set_refresh_rate(list, refresh);
+		kde_mode_list_v2_set_refresh_rate(list, refresh_mhz);
 		kde_mode_list_v2_set_reduced_blanking(list, 0);
 		kde_mode_list_v2_add_mode(list);
 		struct kde_output_configuration_v2 *cfg = kde_output_management_v2_create_configuration(s.management);
 		kde_output_configuration_v2_set_custom_modes(cfg, s.device, list);
-		bool added = s.apply(cfg, "a " + size_text(width, height) + " custom mode", error);
+		bool added = s.apply(cfg, "a " + mode + " custom mode", error);
 		kde_mode_list_v2_destroy(list);
 		if (!added || !client.roundtrip()) {
 			return false;
 		}
-		target = s.find(width, height);
+		target = s.find(width, height, refresh_mhz);
 		if (!target) {
-			*error = "kwin accepted a " + size_text(width, height) + " custom mode but never listed it";
+			*error = "kwin accepted a " + mode + " custom mode but never listed it";
 			return false;
 		}
 	}
 
-	if (!s.current_is(width, height)) {
+	if (!s.current_is(width, height, refresh_mhz)) {
 		struct kde_output_configuration_v2 *cfg = kde_output_management_v2_create_configuration(s.management);
 		kde_output_configuration_v2_mode(cfg, s.device, target->proxy);
-		if (!s.apply(cfg, "switching to " + size_text(width, height), error) || !client.roundtrip()) {
+		if (!s.apply(cfg, "switching to " + mode, error) || !client.roundtrip()) {
 			return false;
 		}
 	}
-	if (!s.current_is(width, height)) {
-		*error = "kwin applied a " + size_text(width, height) + " mode but its output is still " +
-			(s.current ? size_text((uint32_t)s.current->width, (uint32_t)s.current->height) : "unknown");
+	if (!s.current_is(width, height, refresh_mhz)) {
+		*error = "kwin applied a " + mode + " mode but its output is still " +
+			(s.current ? mode_text((uint32_t)s.current->width, (uint32_t)s.current->height,
+							 (uint32_t)std::max(s.current->refresh, 0))
+					   : "unknown");
 		return false;
 	}
 	// After the mode: kwin keeps a scale per output, not per mode, so the

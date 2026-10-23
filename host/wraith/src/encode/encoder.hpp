@@ -82,12 +82,15 @@ struct EncoderConfig {
 	uint32_t bitrate_bps = 80'000'000;
 	uint32_t framerate_num = 60;
 	uint32_t framerate_den = 1;
-	// Frames between periodic IDRs. Long, because every lost frame is
-	// already repaired by a requested keyframe (GdpSession::repair_loss());
-	// the periodic one only bounds damage a repair somehow missed, and on a
-	// slow link each is a burst many P-frames in size. 0 is an infinite
-	// GOP: no periodic IDRs, only the first and requested ones.
-	uint32_t gop_size = 600;
+	// Frames between periodic IDRs; 0 (the default) is an infinite GOP:
+	// no periodic IDRs, only the first and requested ones. Every lost
+	// frame is already repaired by a requested keyframe
+	// (GdpSession::repair_loss()), so a periodic one only bounds damage a
+	// repair somehow missed, and each costs a hitch: a burst many P-frames
+	// in size on a slow link, and at 4K a decode long enough to stall a
+	// client (about 100 ms on Vulkan Video), which a fixed frame count
+	// makes more frequent at 120 or 144 fps.
+	uint32_t gop_size = 0;
 	int drm_fd = -1; // render node used to init the encoder's device
 	// Bits per component of the coded pictures (OutputDescriptor.color.
 	// bit_depth, gdp-spec.md §7.3): 8 or 10. The source stays the 8-bit

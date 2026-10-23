@@ -752,7 +752,7 @@ stream, as soon as the connection is up.
 | 2 | `take_over` | bool | Displace the session's current viewer (§6.4). |
 | 3 | `via_gateway` | bool | Set by a gateway (§6.10). A client MUST send false. |
 | 4 | `network_profile` | `NetworkProfile` | What kind of link this is (§6.9). |
-| 5 | `displays` | repeated `DisplayDescriptor` | The output size the client wants, first entry per output. Empty: keep the session's current size. |
+| 5 | `displays` | repeated `DisplayDescriptor` | The output size and refresh rate the client wants, first entry per output. Empty: keep the session's current size, at 60 Hz. |
 | 6 | `codecs` | repeated string | Video codecs the client can decode, most preferred first (§6.6). |
 | 7 | `codec_formats` | repeated `CodecFormat` | Bit depths and chroma subsamplings the client decodes beyond the baseline, per codec (§7.3). |
 | 8 | `primaries` | repeated `ColorPrimaries` | Primaries the client can show beyond the baseline (§7.3). |
@@ -778,10 +778,17 @@ is taken as empty.
 | 4 | `scale` | double | Output scale factor; 0 or 1 for none. |
 
 A session in this version has one output. A host acts on the first
-`displays` entry only, and only on its width, height and scale, applying
-the same rules as `ResolutionChange` (§7.2); `SessionAccept.outputs`
-reports the size it actually has. A request the host cannot meet is not
-an error.
+`displays` entry only, and only on its width, height, refresh rate and
+scale, applying the same rules as `ResolutionChange` (§7.2); a 0×0 entry
+asks for no size. `SessionAccept.outputs` reports the mode it actually
+has. A request the host cannot meet is not an error.
+
+From a client, `refresh_mhz` is the frame rate it wants the host's
+desktop to run and encode at. A host takes 0, or no `displays` entry,
+as 60 Hz, so that a rate one client asked for does not outlast it. A
+host MAY round it, bound it (the reference host keeps it to whole hertz
+from 30 to its configured maximum) or keep its compositor's own, and
+reports in `OutputDescriptor.display.refresh_mhz` the rate it set.
 
 From a client, `scale` is the scale it wants the host's desktop to run
 the output at: the reference client sends its own desktop's scale when
@@ -1093,7 +1100,7 @@ output:
 | # | Field | Type | Meaning |
 |---|---|---|---|
 | 1 | `stream_id` | uint32 | The output. |
-| 2 | `display` | `DisplayDescriptor` | The size wanted (width and height) and the scale (§6.2); `refresh_mhz` is ignored. |
+| 2 | `display` | `DisplayDescriptor` | The size wanted (width and height), the scale and the refresh rate (§6.2). `refresh_mhz` 0 keeps the current rate. |
 
 The host MUST answer every `ResolutionChange` with a `DisplaysChanged`
 carrying the outputs as they are afterwards, whether it changed the size
@@ -1104,10 +1111,10 @@ pixels per side, or one its compositor or encoder cannot use.
 **`DisplaysChanged`** (host → client) has one field, `outputs` (1,
 repeated `OutputDescriptor`): a full replacement of the output list,
 never a delta. A host MAY also send it unprompted when an output changes.
-When an output's size changes:
+When an output's size or refresh rate changes:
 
-- `DisplaysChanged` MUST be sent before any video frame at the new size;
-- the first frame at the new size MUST be a keyframe;
+- `DisplaysChanged` MUST be sent before any video frame in the new mode;
+- the first frame in the new mode MUST be a keyframe;
 - the codec, capabilities and every other negotiated parameter stay as
   they were.
 

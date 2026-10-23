@@ -45,8 +45,9 @@ public:
 
 	// The ceiling the bitrate controller (GdpSession) adapts under:
 	// wraith.toml's encode.max_bitrate_mbps, or -b -- except on a pyrowave
-	// session, whose ceiling is encode.pyrowave_bpp of the output at 60 fps
-	// (an intra-only codec needs several times the others' rate).
+	// session, whose ceiling is encode.pyrowave_bpp of the output per
+	// frame at the session's frame rate (an intra-only codec needs several
+	// times the others' rate).
 	uint32_t encode_bitrate_bps() const;
 
 	// Video codecs this host can offer a session (gdp-spec.md §6.6's codec
@@ -135,9 +136,10 @@ public:
 
 	// Closes the open encoder, if any. gdp_session.cpp's accept_session()
 	// calls this after a successful SessionHost::request_resize(): the
-	// encoder's size is fixed at open() and it has no resize of its own,
-	// so the set_session_codec() that follows opens a fresh one at the
-	// host's new output_width()/output_height().
+	// encoder's size and frame rate are fixed at open() and it has no
+	// resize of its own, so the set_session_codec() that follows opens a
+	// fresh one at the host's new output_width()/output_height()/
+	// output_refresh_hz().
 	void close_encoder();
 
 	bool has_encoder() const { return encoder_ != nullptr; }
@@ -308,7 +310,7 @@ private:
 	uint32_t target_bitrate_bps_ = 0;
 	LinkProfile link_profile_ = LinkProfile::kLan;
 	bool refine_paused_ = false;
-	uint32_t encode_gop_size_ = 600; // EncoderConfig::gop_size says why
+	uint32_t encode_gop_size_ = 0; // EncoderConfig::gop_size says why
 	bool force_software_encoder_ = false;
 	std::string encoder_name_;
 

@@ -100,6 +100,21 @@ double requested_scale(const gdp::session::DisplayDescriptor &display) {
 	return std::clamp(std::round(scale * 20.0) / 20.0, 0.5, 4.0);
 }
 
+// The frame rate to run at for a client's DisplayDescriptor.refresh_mhz
+// (gdp-spec.md §6.2): the nearest whole Hz, kept to 30..wraith.toml's
+// encode.max_fps, or 60 (max_fps if that is lower) for a client that
+// sends none.
+constexpr uint32_t kDefaultRefreshHz = 60;
+constexpr uint32_t kMinRefreshHz = 30;
+
+uint32_t session_refresh_hz(uint32_t refresh_mhz) {
+	uint32_t max_fps = config().encode.max_fps;
+	if (refresh_mhz == 0) {
+		return std::min(kDefaultRefreshHz, max_fps);
+	}
+	return std::clamp((refresh_mhz + 500) / 1000, kMinRefreshHz, max_fps);
+}
+
 std::vector<std::string> to_vector(const google::protobuf::RepeatedPtrField<std::string> &field) {
 	return std::vector<std::string>(field.begin(), field.end());
 }
@@ -430,7 +445,7 @@ void GdpSession::fill_output(gdp::session::OutputDescriptor *output) const {
 	output->set_stream_id(kStreamId);
 	output->mutable_display()->set_width(host_.output_width());
 	output->mutable_display()->set_height(host_.output_height());
-	output->mutable_display()->set_refresh_mhz(60000);
+	output->mutable_display()->set_refresh_mhz(host_.output_refresh_hz() * 1000);
 	// What wraith set, or 1 ("none") where it leaves the desktop's own.
 	output->mutable_display()->set_scale(host_.output_scale() > 0.0 ? host_.output_scale() : 1.0);
 	// What the encoder really does (gdp-spec.md §7.3): the desktop
@@ -497,32 +512,38 @@ void GdpSession::handle_resolution_change(const gdp::session::ResolutionChange &
 	uint32_t old_height = host_.output_height();
 	double scale = requested_scale(change.display());
 	double old_scale = host_.output_scale();
+	uint32_t old_refresh_hz = host_.output_refresh_hz();
+	// 0 here keeps the current rate, unlike SessionHello's 60: a client
+	// resizing its window isn't asking for a new one.
+	uint32_t refresh_hz = change.display().refresh_mhz() != 0
+		? session_refresh_hz(change.display().refresh_mhz())
+		: old_refresh_hz;
 	SessionServices &services = host_.session();
 	bool refine = gdp::has_capability(capabilities_, gdp::kCapabilityRefine);
 
 	if (change.stream_id() != kStreamId || !valid_output_size(width, height)) {
 		WLOG_ERROR("gdp: ignoring resolution change to %ux%u on stream %u (even sizes %u..%u only)", width,
 			height, change.stream_id(), kMinOutputSide, kMaxOutputSide);
-	} else if (width == old_width && height == old_height) {
+	} else if (width == old_width && height == old_height && refresh_hz == old_refresh_hz) {
 		// The scale alone: the encoder runs on at the same size.
 		if (scale != old_scale) {
-			host_.request_resize(width, height, scale);
+			host_.request_resize(width, height, scale, refresh_hz);
 		}
 	} else {
-		if (!host_.request_resize(width, height, scale)) {
-			WLOG_ERROR("gdp: client asked for %ux%u, but this session can't resize -- staying at %ux%u",
-				width, height, old_width, old_height);
+		if (!host_.request_resize(width, height, scale, refresh_hz)) {
+			WLOG_ERROR("gdp: client asked for %ux%u@%u, but this session can't resize -- staying at %ux%u@%u",
+				width, height, refresh_hz, old_width, old_height, old_refresh_hz);
 		} else {
 			services.close_encoder();
 			if (open_session_encoder(video_codec_, refine)) {
-				WLOG_INFO("gdp: resized output to %ux%u mid-session (was %ux%u)", width, height, old_width,
-					old_height);
+				WLOG_INFO("gdp: output now %ux%u@%u mid-session (was %ux%u@%u)", width, height, refresh_hz,
+					old_width, old_height, old_refresh_hz);
 			} else {
-				// The encoder won't open at that size (a hardware limit):
+				// The encoder won't open in that mode (a hardware limit):
 				// go back to the old one, which it just ran at.
-				WLOG_ERROR("gdp: no %s encoder at %ux%u, going back to %ux%u", video_codec_.c_str(), width,
-					height, old_width, old_height);
-				host_.request_resize(old_width, old_height, old_scale);
+				WLOG_ERROR("gdp: no %s encoder at %ux%u@%u, going back to %ux%u@%u", video_codec_.c_str(),
+					width, height, refresh_hz, old_width, old_height, old_refresh_hz);
+				host_.request_resize(old_width, old_height, old_scale, old_refresh_hz);
 				services.close_encoder();
 				if (!open_session_encoder(video_codec_, refine)) {
 					WLOG_ERROR("gdp: the %s encoder won't reopen at %ux%u either", video_codec_.c_str(),
@@ -537,7 +558,8 @@ void GdpSession::handle_resolution_change(const gdp::session::ResolutionChange &
 	gdp::session::ControlEnvelope env;
 	fill_output(env.mutable_displays_changed()->add_outputs());
 	send_control(env);
-	if (host_.output_width() != old_width || host_.output_height() != old_height) {
+	if (host_.output_width() != old_width || host_.output_height() != old_height ||
+		host_.output_refresh_hz() != old_refresh_hz) {
 		// The reopened encoder's first frame is a keyframe anyway; this
 		// also sends one on a desktop that is sitting still.
 		request_keyframe();
@@ -682,43 +704,53 @@ bool GdpSession::accept_session(const gdp::session::SessionHello &hello) {
 	// last client left it at.
 	services.set_refine_paused(false);
 
-	// SessionHello.displays: spectre's requested resolution (spectre-qt's
-	// Settings dialog, or -r on the spectre CLI), gdp-spec.md §6.2. Only
-	// the first entry matters -- wraith is single-output -- and only a
-	// change is acted on: ScreencastHost::request_resize() restarts its
-	// capture whatever the size, so it must not be called
-	// for a size that already matches. SessionAccept reports the actual
-	// size either way (SessionHost::request_resize()).
+	// SessionHello.displays: spectre's requested resolution and refresh
+	// rate (spectre-qt's Settings dialog, or -r and -R on the spectre
+	// CLI), gdp-spec.md §6.2. Only the first entry matters -- wraith is
+	// single-output -- and only a change is acted on:
+	// ScreencastHost::request_resize() restarts its capture whatever the
+	// mode, so it must not be called for one that already matches.
+	// SessionAccept reports the actual mode either way
+	// (SessionHost::request_resize()). A client that asks for no refresh
+	// rate gets 60, so one that asked for 144 doesn't leave the desktop
+	// running at it for the next.
 	//
-	// Done before the codec is chosen: the encoder's size is fixed at
-	// open(), so a successful resize closes it and the codec loop below
-	// opens it once, at the new size.
+	// Done before the codec is chosen: the encoder's size and frame rate
+	// are fixed at open(), so a successful change closes it and the codec
+	// loop below opens it once, in the new mode.
+	uint32_t width = host_.output_width();
+	uint32_t height = host_.output_height();
+	double scale = host_.output_scale();
+	uint32_t refresh_hz = session_refresh_hz(0);
 	if (hello.displays_size() > 0) {
 		const auto &requested = hello.displays(0);
+		refresh_hz = session_refresh_hz(requested.refresh_mhz());
 		if (requested.width() == 0 && requested.height() == 0) {
-			// No preference.
+			// No size preference.
 		} else if (!valid_output_size(requested.width(), requested.height())) {
 			// A token holder's size, so bounded like a ResolutionChange:
 			// 1x1 or 65535x65535 would stick to the output after the
 			// encoder failed on it, and fail every reconnect after.
 			WLOG_ERROR("gdp: ignoring the requested %ux%u (even sizes %u..%u only), staying at %ux%u",
-				requested.width(), requested.height(), kMinOutputSide, kMaxOutputSide, host_.output_width(),
-				host_.output_height());
+				requested.width(), requested.height(), kMinOutputSide, kMaxOutputSide, width, height);
 		} else {
-			double scale = requested_scale(requested);
-			bool resize = requested.width() != host_.output_width() || requested.height() != host_.output_height();
-			if (resize || scale != host_.output_scale()) {
-				if (host_.request_resize(requested.width(), requested.height(), scale)) {
-					if (resize) {
-						services.close_encoder();
-						WLOG_INFO("gdp: resized output to %ux%u (client requested %ux%u)", host_.output_width(),
-							host_.output_height(), requested.width(), requested.height());
-					}
-				} else if (resize) {
-					WLOG_ERROR("gdp: client requested %ux%u, but this session can't resize -- staying at %ux%u",
-						requested.width(), requested.height(), host_.output_width(), host_.output_height());
-				}
+			width = requested.width();
+			height = requested.height();
+			scale = requested_scale(requested);
+		}
+	}
+	bool resize = width != host_.output_width() || height != host_.output_height();
+	bool reclock = refresh_hz != host_.output_refresh_hz();
+	if (resize || reclock || scale != host_.output_scale()) {
+		if (host_.request_resize(width, height, scale, refresh_hz)) {
+			if (resize || reclock) {
+				services.close_encoder();
+				WLOG_INFO("gdp: output now %ux%u@%u (client requested %ux%u@%u)", host_.output_width(),
+					host_.output_height(), host_.output_refresh_hz(), width, height, refresh_hz);
 			}
+		} else if (resize) {
+			WLOG_ERROR("gdp: client requested %ux%u, but this session can't resize -- staying at %ux%u",
+				width, height, host_.output_width(), host_.output_height());
 		}
 	}
 

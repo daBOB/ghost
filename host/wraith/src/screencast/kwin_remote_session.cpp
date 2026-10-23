@@ -199,7 +199,8 @@ bool KwinRemoteSession::open(const Config &config) {
 	// Before stream_output: the stream is negotiated at the output's size
 	// at that moment, and PipeWireCapture offers exactly config's.
 	std::string size_error;
-	if (!set_kwin_output_size(impl_->client, config.width, config.height, config.scale, &size_error)) {
+	if (!set_kwin_output_size(impl_->client, config.width, config.height, config.scale, config.refresh_hz,
+			&size_error)) {
 		// Retried every tick like everything else here; said once at ERROR.
 		if (!impl_->size_warned) {
 			impl_->size_warned = true;
@@ -212,7 +213,7 @@ bool KwinRemoteSession::open(const Config &config) {
 		impl_->teardown_wayland();
 		return false;
 	}
-	WLOG_INFO("screencast: kwin's output is %ux%u", config.width, config.height);
+	WLOG_INFO("screencast: kwin's output is %ux%u@%u", config.width, config.height, config.refresh_hz);
 
 	impl_->output = static_cast<struct wl_output *>(impl_->client.bind(&wl_output_interface, 1));
 	impl_->manager = static_cast<struct zkde_screencast_unstable_v1 *>(

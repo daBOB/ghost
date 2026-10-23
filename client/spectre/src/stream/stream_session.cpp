@@ -406,7 +406,8 @@ bool StreamSession::connect_and_wait_for_accept() {
 	// it there is no scale to send, and open_window() reports the failure.
 	sdl_video_early_ = SDL_InitSubSystem(SDL_INIT_VIDEO);
 	client_.set_requested_display(options_.requested_width, options_.requested_height,
-		options_.requested_width ? requested_scale(options_.requested_width, options_.requested_height) : 0.0);
+		options_.requested_width ? requested_scale(options_.requested_width, options_.requested_height) : 0.0,
+		requested_refresh_mhz());
 	DecodableCodecs offer = offerable_codecs();
 	offered_codecs_ = offer.codecs;
 	offered_ten_bit_ = offer.ten_bit;
@@ -957,6 +958,15 @@ double StreamSession::requested_scale(uint32_t width, uint32_t height) const {
 		scale = density * SDL_GetDisplayContentScale(id);
 	}
 	return scale > 0.0f ? (double)scale : 0.0;
+}
+
+uint32_t StreamSession::requested_refresh_mhz() const {
+	if (options_.refresh_hz != 0) {
+		return options_.refresh_hz * 1000;
+	}
+	SDL_DisplayID id = SDL_GetPrimaryDisplay();
+	const SDL_DisplayMode *mode = id ? SDL_GetCurrentDisplayMode(id) : nullptr;
+	return mode && mode->refresh_rate > 0.0f ? (uint32_t)std::lround(mode->refresh_rate * 1000.0f) : 60000;
 }
 
 void StreamSession::on_disconnected(const std::string &reason) {

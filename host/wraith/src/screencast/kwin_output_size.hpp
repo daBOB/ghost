@@ -25,12 +25,12 @@ namespace wraith {
 class WaylandClient;
 
 // Blocking (a few round trips on `client`). True once the first
-// kde_output_device_v2 is at width x height, and at `scale` unless that is
-// 0 -- immediately if it already was. False with `*error` set if kwin hides
+// kde_output_device_v2 is at width x height refreshing at refresh_hz, and
+// at `scale` unless that is 0 -- immediately if it already was. False with `*error` set if kwin hides
 // kde_output_management_v2 from wraith (the desktop-file trust rule,
 // packaging/desktop/wraith.desktop.in), advertises a version without
 // custom modes (< 18), or refuses the change.
 bool set_kwin_output_size(WaylandClient &client, uint32_t width, uint32_t height, double scale,
-	std::string *error);
+	uint32_t refresh_hz, std::string *error);
 
 } // namespace wraith

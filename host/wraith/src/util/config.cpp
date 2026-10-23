@@ -289,13 +289,14 @@ ConfigLoad load_config(const std::string &path) {
 
 	const toml::table *encode = reader.section(root, "encode",
 		{"gop", "max_bitrate_mbps", "force_software", "nvenc_zero_copy", "bit_depth", "pyrowave_bpp",
-			"codecs"});
+			"max_fps", "codecs"});
 	reader.integer(encode, "encode", "gop", 0, 1000000, &next.encode.gop);
 	reader.integer(encode, "encode", "max_bitrate_mbps", 1, 4000, &next.encode.max_bitrate_mbps);
 	reader.boolean(encode, "encode", "force_software", &next.encode.force_software);
 	reader.boolean(encode, "encode", "nvenc_zero_copy", &next.encode.nvenc_zero_copy);
 	reader.bit_depth(encode, "encode", "bit_depth", &next.encode.bit_depth);
 	reader.number(encode, "encode", "pyrowave_bpp", 0.1, 8.0, &next.encode.pyrowave_bpp);
+	reader.integer(encode, "encode", "max_fps", 30, 240, &next.encode.max_fps);
 	const toml::table *codecs = encode
 		? reader.section(*encode, "codecs", {"pyrowave", "av1", "h265", "h264"}, "encode.codecs")
 		: nullptr;
@@ -365,6 +366,7 @@ std::string describe_config(const WraithConfig &config) {
 		<< "nvenc_zero_copy = " << flag(config.encode.nvenc_zero_copy) << "\n"
 		<< "bit_depth = " << (config.encode.bit_depth == 0 ? "\"auto\"" : "8") << "\n"
 		<< "pyrowave_bpp = " << config.encode.pyrowave_bpp << "\n"
+		<< "max_fps = " << config.encode.max_fps << "\n"
 		<< "\n[encode.codecs]\n"
 		<< "pyrowave = " << flag(config.encode.codecs.pyrowave) << "\n"
 		<< "av1 = " << flag(config.encode.codecs.av1) << "\n"

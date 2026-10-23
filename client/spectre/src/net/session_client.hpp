@@ -86,14 +86,16 @@ public:
 
 	// Sets the one DisplayDescriptor SessionHello.displays carries
 	// (gdp-spec.md §7.2), if any. Must be called before connect() --
-	// SessionHello is built and sent from within it. 0x0 (the default)
-	// omits displays entirely rather than sending a 0x0 entry. `scale` is
+	// SessionHello is built and sent from within it. 0x0 asks for no size,
+	// and with no refresh rate either omits displays entirely. `scale` is
 	// the desktop scale wanted (StreamSession::requested_scale()); 0 sends
-	// none, which wraith takes as 100%.
-	void set_requested_display(uint32_t width, uint32_t height, double scale) {
+	// none, which wraith takes as 100%. `refresh_mhz` is the frame rate
+	// wanted; 0 sends none, which wraith takes as 60 Hz.
+	void set_requested_display(uint32_t width, uint32_t height, double scale, uint32_t refresh_mhz) {
 		requested_width_ = width;
 		requested_height_ = height;
 		requested_scale_ = scale;
+		requested_refresh_mhz_ = refresh_mhz;
 	}
 
 	// SessionHello.codecs: the gdp/video_codec.hpp tokens this client can
@@ -459,6 +461,7 @@ private:
 	uint32_t requested_width_ = 0;
 	uint32_t requested_height_ = 0;
 	double requested_scale_ = 0.0;
+	uint32_t requested_refresh_mhz_ = 0;
 	gdp::Stream *control_ = nullptr;
 	gdp::Stream *input_ = nullptr;
 	gdp::FrameReader control_reader_;

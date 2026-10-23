@@ -61,8 +61,8 @@ void test_values_apply() {
 	wraith::ConfigLoad load = wraith::load_config(write_file("set.toml",
 		"[log]\nlevel = \"debug\"\n[network]\ncongestion_control = \"bbr\"\nrate_trace = true\n"
 		"pacing_multiplier = 4\npacing_floor_mbps = 900\n"
-		"[encode]\ngop = 0\nmax_bitrate_mbps = 45\nforce_software = true\nnvenc_zero_copy = false\n"
-		"bit_depth = 8\npyrowave_bpp = 0.75\n"
+		"[encode]\ngop = 300\nmax_bitrate_mbps = 45\nforce_software = true\nnvenc_zero_copy = false\n"
+		"bit_depth = 8\npyrowave_bpp = 0.75\nmax_fps = 120\n"
 		"[encode.codecs]\nav1 = true\nh264 = false\npyrowave = true\n"
 		"[refine]\nburst_ms = 200\nsettle_ms = 120\n"
 		"[display]\nclient_scale = false\n"));
@@ -77,12 +77,13 @@ void test_values_apply() {
 	CHECK(!c.display.client_scale);
 	CHECK(c.refine.settle_ms == 120);
 	CHECK(c.refine.bandwidth_percent == 50); // untouched keys keep their default
-	CHECK(c.encode.gop == 0);
+	CHECK(c.encode.gop == 300);
 	CHECK(c.encode.max_bitrate_mbps == 45);
 	CHECK(c.encode.force_software);
 	CHECK(!c.encode.nvenc_zero_copy);
 	CHECK(c.encode.bit_depth == 8);
 	CHECK(c.encode.pyrowave_bpp == 0.75);
+	CHECK(c.encode.max_fps == 120);
 	CHECK(c.encode.codec_enabled("av1"));
 	CHECK(c.encode.codec_enabled("pyrowave"));
 	CHECK(c.encode.codec_enabled("h265")); // untouched keys keep their default
@@ -106,6 +107,7 @@ void test_bad_files_are_rejected_whole() {
 		"[encode]\nbit_depth = 10\n",                     // only "auto" or 8
 		"[encode]\nbit_depth = \"8\"\n",                  // the integer, not a string
 		"[encode]\npyrowave_bpp = 0\n",                   // out of range
+		"[encode]\nmax_fps = 300\n",                      // out of range
 		"[encode]\npyrowave_bpp = \"1\"\n",               // wrong type
 	};
 	for (const char *contents : bad) {

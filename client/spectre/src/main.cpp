@@ -49,6 +49,9 @@ static void usage(const char *argv0) {
 	printf("            screen's in pixels, else 100%%; a number (1, 1.5, 2) or percentage (150%%)\n");
 	printf("            sets it. The host applies it to its desktop (GNOME, KDE, wlroots), unless\n");
 	printf("            it is configured to leave the scale alone\n");
+	printf("  -H rate   the frame rate to ask the host for, in Hz: 60 (default), 120, 144, any\n");
+	printf("            rate from 30 to 240, or auto for this display's refresh rate. The host runs\n");
+	printf("            its desktop at it, up to its own limit; more frames cost more bandwidth\n");
 	printf("  -A        follow the window: when the window settles at a new size, ask the host\n");
 	printf("            for that resolution. Off by default, when the picture scales to the\n");
 	printf("            window and the resolution changes only from the session menu\n");
@@ -300,6 +303,19 @@ int main(int argc, char *argv[]) {
 					return 1;
 				}
 				options.scale = scale;
+			}
+		} else if (strcmp(arg, "-H") == 0) {
+			const char *v = next_value();
+			if (v && strcmp(v, "auto") == 0) {
+				options.refresh_hz = 0;
+			} else {
+				char *end = nullptr;
+				unsigned long hz = v ? strtoul(v, &end, 10) : 0;
+				if (!end || *end != '\0' || hz < 30 || hz > 240) {
+					SLOG_ERROR("spectre: -H takes auto, or a rate from 30 to 240");
+					return 1;
+				}
+				options.refresh_hz = (uint32_t)hz;
 			}
 		} else if (strcmp(arg, "-c") == 0) {
 			const char *v = next_value();

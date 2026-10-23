@@ -11,7 +11,7 @@
 //
 // Runs on the caller's wl_event_loop: an implementation adds its own fds
 // as sources, no dedicated thread. Callers must not block in any callback
-// -- frames arrive at up to 60Hz off the same loop that also services GDP.
+// -- frames arrive at up to Params::max_fps off the same loop that also services GDP.
 #pragma once
 
 #include "encode/encoder.hpp" // DmabufFrame
@@ -33,6 +33,10 @@ public:
 		struct wl_event_loop *event_loop = nullptr;
 		uint32_t width = 0;
 		uint32_t height = 0;
+		// The most frames a second to ask the producer for. With GNOME's
+		// virtual monitor it is also that monitor's refresh rate: mutter
+		// creates it at the negotiated maxFramerate.
+		uint32_t max_fps = 60;
 		// Encoder::supported_import_modifiers(DRM_FORMAT_XRGB8888) --
 		// offered as the dmabuf format's acceptable modifier set. Capture
 		// still works with this empty (dmabuf import modifiers unknown

@@ -473,28 +473,39 @@ struct PipeWireCapture::Impl {
 		}();
 		pw_stream_add_listener(pw_stream_, &stream_listener, &stream_events, this);
 
-		uint8_t buffer[2048];
+		uint8_t buffer[4096];
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-		const struct spa_pod *params[8];
+		const struct spa_pod *params[12];
 		int n_params = 0;
 
-		// BGRx at the output's size, up to 60 fps: with `modifiers` the
-		// dmabuf format, without them the MemFd/CPU fallback (no modifier
-		// prop at all, the convention mutter's own shm-format param uses).
-		auto enum_format = [&](const std::vector<uint64_t> &modifiers) {
+		// BGRx at the output's size, up to config.max_fps: with `modifiers`
+		// the dmabuf format, without them the MemFd/CPU fallback (no
+		// modifier prop at all, the convention mutter's own shm-format
+		// param uses).
+		//
+		// Each comes twice, `exact_rate` first. mutter makes its virtual
+		// monitor at the negotiated maxFramerate, and against a range it
+		// keeps its own default of 60, so only an exact rate gets it more.
+		// kwin offers at most its output's refresh, so an exact rate above
+		// that wouldn't negotiate at all; the range after it still does.
+		auto enum_format = [&](const std::vector<uint64_t> &modifiers, bool exact_rate) {
 			struct spa_pod_frame f[2];
 			struct spa_rectangle rect{config.width, config.height};
-			struct spa_fraction def_fr{0, 1}, min_fr{0, 1}, max_fr{60, 1};
+			struct spa_fraction def_fr{0, 1}, min_fr{0, 1}, max_fr{config.max_fps, 1};
 			spa_pod_builder_push_object(&b, &f[0], SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
 			spa_pod_builder_add(&b, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), 0);
 			spa_pod_builder_add(&b, SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
 			spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx), 0);
 			spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&rect), 0);
 			spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&def_fr), 0);
-			spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_maxFramerate,
-				SPA_POD_CHOICE_RANGE_Fraction(SPA_POD_Fraction(&max_fr), SPA_POD_Fraction(&min_fr),
-					SPA_POD_Fraction(&max_fr)),
-				0);
+			if (exact_rate) {
+				spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_maxFramerate, SPA_POD_Fraction(&max_fr), 0);
+			} else {
+				spa_pod_builder_add(&b, SPA_FORMAT_VIDEO_maxFramerate,
+					SPA_POD_CHOICE_RANGE_Fraction(SPA_POD_Fraction(&max_fr), SPA_POD_Fraction(&min_fr),
+						SPA_POD_Fraction(&max_fr)),
+					0);
+			}
 			if (!modifiers.empty()) {
 				spa_pod_builder_prop(&b, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
 				spa_pod_builder_push_choice(&b, &f[1], SPA_CHOICE_Enum, 0);
@@ -507,9 +518,11 @@ struct PipeWireCapture::Impl {
 			return static_cast<const struct spa_pod *>(spa_pod_builder_pop(&b, &f[0]));
 		};
 		if (!config.import_modifiers.empty()) {
-			params[n_params++] = enum_format(config.import_modifiers);
+			params[n_params++] = enum_format(config.import_modifiers, true);
+			params[n_params++] = enum_format(config.import_modifiers, false);
 		}
-		params[n_params++] = enum_format({});
+		params[n_params++] = enum_format({}, true);
+		params[n_params++] = enum_format({}, false);
 		{
 			struct spa_pod_frame f;
 			spa_pod_builder_push_object(&b, &f, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers);

@@ -124,6 +124,12 @@ struct StreamOptions {
 	// copy of this screen, its UI the size of this one's -- else none,
 	// which the host takes as 100% (requested_scale()).
 	std::optional<double> scale;
+	// The frame rate to ask for (spectre -H, DisplayDescriptor.refresh_mhz,
+	// gdp-spec.md §6.2): 60 by default, since every frame costs the host
+	// encoding and the link bandwidth; 0 ("auto") is this display's
+	// refresh rate (requested_refresh_mhz()). The host runs its desktop at
+	// it, up to its own limit, and SessionAccept says what it settled on.
+	uint32_t refresh_hz = 60;
 	// Follow the window (spectre -A, off by default): when the window's
 	// video area settles at a new pixel size, ask the host for that size
 	// (ResolutionChange, gdp-spec.md §7.2). Off, the remote resolution only
@@ -278,6 +284,10 @@ private:
 	// if given, else this desktop's scale when that is the screen's size in
 	// pixels, else 0 (none: the host's 100%).
 	double requested_scale(uint32_t width, uint32_t height) const;
+	// DisplayDescriptor.refresh_mhz for SessionHello: Options::refresh_hz,
+	// or for "auto" the primary display's refresh rate (60 Hz if SDL
+	// doesn't know it).
+	uint32_t requested_refresh_mhz() const;
 	// -A. schedule_follow_window(), on a window size event: arms the settle
 	// timer, or -- in the moment after snap_window() or the window first
 	// appearing -- takes the new video area as the baseline instead (those

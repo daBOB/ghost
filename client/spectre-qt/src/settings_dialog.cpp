@@ -45,6 +45,7 @@ constexpr auto kFullscreenKey = "spectre/fullscreen";
 constexpr auto kDecoderKey = "spectre/preferred_decoder";
 constexpr auto kResolutionKey = "spectre/resolution";
 constexpr auto kScaleKey = "spectre/scale";
+constexpr auto kRefreshRateKey = "spectre/refresh_rate";
 constexpr auto kCodecKey = "spectre/preferred_codec";
 constexpr auto kNetworkKey = "spectre/network_profile";
 constexpr auto kTileOutlineKey = "spectre/debug_tile_outlines";
@@ -74,6 +75,7 @@ SpectreSettings load_settings() {
 	settings.preferred_decoder = store.value(kDecoderKey, settings.preferred_decoder).toString();
 	settings.resolution = store.value(kResolutionKey, QString()).toString();
 	settings.scale = store.value(kScaleKey, settings.scale).toString();
+	settings.refresh_rate = store.value(kRefreshRateKey, settings.refresh_rate).toString();
 	settings.preferred_codec = store.value(kCodecKey, QString()).toString();
 	settings.network_profile = store.value(kNetworkKey, settings.network_profile).toString();
 	// Gamepad forwarding defaults on here, unlike the spectre CLI's -G
@@ -102,6 +104,7 @@ void save_settings(const SpectreSettings &settings) {
 	store.setValue(kDecoderKey, settings.preferred_decoder);
 	store.setValue(kResolutionKey, settings.resolution);
 	store.setValue(kScaleKey, settings.scale);
+	store.setValue(kRefreshRateKey, settings.refresh_rate);
 	store.setValue(kCodecKey, settings.preferred_codec);
 	store.setValue(kNetworkKey, settings.network_profile);
 	store.setValue(kTileOutlineKey, settings.debug_tile_outlines);
@@ -156,6 +159,17 @@ SettingsDialog::SettingsDialog(const SpectreSettings &settings, bool debug, QWid
 		   "scale when the resolution is this screen's own (Match this display), so the remote desktop "
 		   "looks the same as this one, and uses 100% otherwise. A percentage applies whatever the "
 		   "resolution."));
+
+	ui->refreshRateCombo->addItem(tr("Match this display"), QStringLiteral("auto"));
+	ui->refreshRateCombo->addItem(tr("60 Hz (Recommended)"), QStringLiteral("60"));
+	ui->refreshRateCombo->addItem(tr("120 Hz"), QStringLiteral("120"));
+	ui->refreshRateCombo->addItem(tr("144 Hz"), QStringLiteral("144"));
+	int refresh_index = ui->refreshRateCombo->findData(settings.refresh_rate);
+	ui->refreshRateCombo->setCurrentIndex(refresh_index >= 0 ? refresh_index : 1);
+	ui->refreshRateCombo->setToolTip(
+		tr("How many frames a second the host's desktop runs at and sends. More than 60 is smoother on a "
+		   "high-refresh display, but the host encodes, and the network carries, proportionally more. "
+		   "The host may cap it lower."));
 
 	ui->fullscreenCheck->setChecked(settings.fullscreen);
 	ui->followWindowCheck->setChecked(settings.follow_window);
@@ -283,6 +297,7 @@ SpectreSettings SettingsDialog::settings() const {
 	settings.preferred_decoder = ui->decoderCombo->currentData().toString();
 	settings.resolution = ui->resolutionCombo->currentData().toString();
 	settings.scale = ui->scaleCombo->currentData().toString();
+	settings.refresh_rate = ui->refreshRateCombo->currentData().toString();
 	settings.preferred_codec = ui->codecCombo->currentData().toString();
 	settings.network_profile = ui->networkCombo->currentData().toString();
 	settings.debug_tile_outlines = ui->tileOutlineCheck->isChecked();

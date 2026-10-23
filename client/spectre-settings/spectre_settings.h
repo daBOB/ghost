@@ -98,6 +98,11 @@ struct SpectreSettings {
 	// screen -- and 100% otherwise. A number ("1", "1.5", "2") is sent as
 	// is, whatever the size.
 	QString scale = QStringLiteral("auto");
+	// spectre -H: the frame rate to ask the host for, "60" (the default,
+	// passing nothing), "120", "144", or "auto" for the refresh rate of
+	// the display spectre starts on. More than 60 costs the host's encoder
+	// and the link proportionally more.
+	QString refresh_rate = QStringLiteral("60");
 	// spectre -A: ask the host for the window's size whenever it settles
 	// at a new one. Off by default -- the picture scales to the window,
 	// and the session menu changes the resolution.

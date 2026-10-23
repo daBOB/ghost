@@ -40,6 +40,10 @@ QStringList SpectreSettings::to_args(const QScreen *screen, bool debug) const {
 	if (!scale.isEmpty() && scale != QLatin1String("auto")) {
 		args << "-s" << scale;
 	}
+	// 60 is spectre's own default, so it needs no flag.
+	if (!refresh_rate.isEmpty() && refresh_rate != QLatin1String("60")) {
+		args << "-H" << refresh_rate;
+	}
 	if (!preferred_codec.isEmpty()) {
 		args << "-C" << preferred_codec;
 	}

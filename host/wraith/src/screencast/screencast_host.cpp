@@ -178,6 +178,7 @@ bool ScreencastHost::try_open_capture_and_input() {
 		rconfig.width = width_;
 		rconfig.height = height_;
 		rconfig.scale = scale_;
+		rconfig.refresh_hz = refresh_hz_;
 		remote_session_->on_closed = [this] { on_remote_session_closed(); };
 		if (!remote_session_->open(rconfig)) {
 			return false;
@@ -223,6 +224,7 @@ bool ScreencastHost::open_capture() {
 	config.event_loop = event_loop_;
 	config.width = width_;
 	config.height = height_;
+	config.max_fps = refresh_hz_;
 	// Best-effort: if start_gdp_session()/start_encoder() haven't run
 	// yet (main.cpp calls those before run()), there's no encoder to
 	// ask and this is just empty -- a FrameSource still offers its
@@ -571,10 +573,11 @@ void ScreencastHost::give_up_reader() {
 	});
 }
 
-bool ScreencastHost::request_resize(uint32_t width, uint32_t height, double scale) {
+bool ScreencastHost::request_resize(uint32_t width, uint32_t height, double scale, uint32_t refresh_hz) {
 	if (!remote_session_->sizes_output_on_open()) {
-		// A scale alone is the client's preference, not a request it
-		// made: no error for every connect to a desktop that keeps its own.
+		// A scale or a refresh rate alone is the client's preference, not
+		// a request it made: no error for every connect to a desktop that
+		// keeps its own.
 		if (width != width_ || height != height_) {
 			WLOG_ERROR("screencast: %s can't resize its output -- ignoring request for %ux%u, staying at %ux%u",
 				remote_session_->name(), width, height, width_, height_);
@@ -588,12 +591,13 @@ bool ScreencastHost::request_resize(uint32_t width, uint32_t height, double scal
 	width_ = width;
 	height_ = height;
 	scale_ = scale;
+	refresh_hz_ = refresh_hz;
 	if (scale > 0.0) {
-		WLOG_INFO("screencast: resizing %s's output to %ux%u at %.0f%% (client's requested size)",
-			remote_session_->name(), width, height, scale * 100.0);
+		WLOG_INFO("screencast: resizing %s's output to %ux%u@%u at %.0f%% (client's requested mode)",
+			remote_session_->name(), width, height, refresh_hz, scale * 100.0);
 	} else {
-		WLOG_INFO("screencast: resizing %s's output to %ux%u (client's requested size)", remote_session_->name(),
-			width, height);
+		WLOG_INFO("screencast: resizing %s's output to %ux%u@%u (client's requested mode)",
+			remote_session_->name(), width, height, refresh_hz);
 	}
 	// The compositor is already up, so this normally succeeds at once;
 	// the retry loop is for one that is still starting.

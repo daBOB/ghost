@@ -40,13 +40,14 @@
 #pacing_floor_mbps = 500
 
 [encode]
-# Frames between periodic keyframes: 600 is one every 10 s at 60 fps.
-# Every lost frame is already repaired by a keyframe spectre's loss report
-# asks for, so the periodic one only bounds damage that went unreported,
-# and on a slow link each is a burst many ordinary frames in size. 0 sends
-# no periodic keyframes at all (an infinite GOP): only the first and the
-# requested ones.
-#gop = 600
+# Frames between periodic keyframes, or 0 (the default) for none at all
+# (an infinite GOP): only the first and the requested ones. Every lost
+# frame is already repaired by a keyframe spectre's loss report asks for,
+# so a periodic one only bounds damage that went unreported, and each is a
+# hitch: a burst many ordinary frames in size on a slow link, and at 4K a
+# decode long enough to stall the client for about 100 ms. 600 is one
+# every 10 s at 60 fps, but every 4 s at 144.
+#gop = 0
 
 # The most video bitrate a session may use, in Mbit/s. The rate
 # controller works below this, following what the link can carry; on a
@@ -71,11 +72,18 @@
 # 8-bit baseline for every session.
 #bit_depth = "auto"
 
-# PyroWave only: its bitrate ceiling, in bits per pixel of the output at
-# 60 fps -- used instead of max_bitrate_mbps (and -b) for a pyrowave
-# session. 1.0 (~500 Mbit/s at 4K, ~125 at 1080p) is where dense text
-# stops showing halos; photos and games look fine from about 0.5.
+# PyroWave only: its bitrate ceiling, in bits per pixel of the output per
+# frame -- used instead of max_bitrate_mbps (and -b) for a pyrowave
+# session. 1.0 (~500 Mbit/s at 4K60, ~125 at 1080p60, and 2.4 times that
+# at 144 fps) is where dense text stops showing halos; photos and games
+# look fine from about 0.5.
 #pyrowave_bpp = 1.0
+
+# The highest frame rate a client may ask for (30-240). The desktop runs
+# at the rate the client asks for, up to this -- spectre asks for 60
+# unless its user picks more -- and every frame costs encoding time and
+# bandwidth, so 144 is about 2.4 times the load of 60.
+#max_fps = 144
 
 # Which video codecs wraith offers a client; the client picks the first of
 # its own preferences that is on, and a GPU is chosen by the best codec

@@ -29,13 +29,14 @@ namespace {
 
 void usage(const char *argv0) {
 	fprintf(stderr,
-		"Usage: %s -h host -p port -t token -P sha256 [-s seconds] [-N profile] [-r WIDTHxHEIGHT] [-C codec] [-o file] [-R] [-L seconds]\n"
+		"Usage: %s -h host -p port -t token -P sha256 [-s seconds] [-N profile] [-r WIDTHxHEIGHT] [-H hz] [-C codec] [-o file] [-R] [-L seconds]\n"
 		"  Connects like spectre, decodes nothing, and prints per-second arrival stats:\n"
 		"  frames, keyframes, Mbps, RTT, and the one-way delay above the run's minimum\n"
 		"  (queuing). -s runs that long (default 20) then prints a summary and exits.\n"
 		"  -N is spectre's -N (auto, lan, internet, mobile); -C offers only this codec (default\n"
 		"  h264 -- nothing is decoded, so any the host can encode will do); -R offers lossless refinement,\n"
-		"  which puts the host on its CPU-frame path. -o writes every received coded frame to\n"
+		"  which puts the host on its CPU-frame path. -H asks for that frame rate, as spectre -H\n"
+		"  does (the host's default, 60, without it). -o writes every received coded frame to\n"
 		"  a file, for checking the stream with ffmpeg afterwards. -L sends a LogoutRequest that\n"
 		"  many seconds in and waits for the host to end the session (wraith's teardown path).\n",
 		argv0);
@@ -63,6 +64,7 @@ int main(int argc, char *argv[]) {
 	std::string dump_path;
 	uint32_t width = 0;
 	uint32_t height = 0;
+	uint32_t refresh_hz = 0;
 	int port = 0;
 	int seconds = 20;
 	int logout_after = 0; // -L: 0 for never
@@ -112,6 +114,8 @@ int main(int argc, char *argv[]) {
 				usage(argv[0]);
 				return 1;
 			}
+		} else if (strcmp(arg, "-H") == 0) {
+			refresh_hz = (uint32_t)atoi(v);
 		} else {
 			usage(argv[0]);
 			return 1;
@@ -125,7 +129,7 @@ int main(int argc, char *argv[]) {
 	spectre::SessionClient client;
 	client.set_decodable_codecs({codec});
 	client.set_network_profile(profile);
-	client.set_requested_display(width, height, 0.0);
+	client.set_requested_display(width, height, 0.0, refresh_hz * 1000);
 	client.set_lossless_refinement(refine);
 	client.set_file_transfer(false); // nothing here would send or fetch one
 

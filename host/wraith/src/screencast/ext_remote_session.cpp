@@ -152,7 +152,8 @@ struct ExtRemoteSession::Impl {
 	}
 
 	// Best-effort: resizes the compositor's first output to config.width x
-	// config.height, at config.scale unless that is 0, via
+	// config.height at config.refresh_hz, at config.scale unless that is
+	// 0, via
 	// zwlr_output_manager_v1 (wlr-output-management-
 	// unstable-v1), the same mechanism wayvnc uses to size a wlroots
 	// headless/virtual output to match a connecting client. No-op if the
@@ -188,7 +189,7 @@ struct ExtRemoteSession::Impl {
 		struct zwlr_output_configuration_head_v1 *cfg_head =
 			zwlr_output_configuration_v1_enable_head(cfg, pending_head);
 		zwlr_output_configuration_head_v1_set_custom_mode(cfg_head, (int32_t)config.width,
-			(int32_t)config.height, 0);
+			(int32_t)config.height, (int32_t)(config.refresh_hz * 1000));
 		if (config.scale > 0.0) {
 			zwlr_output_configuration_head_v1_set_scale(cfg_head, wl_fixed_from_double(config.scale));
 		}
@@ -200,13 +201,13 @@ struct ExtRemoteSession::Impl {
 		zwlr_output_configuration_v1_add_listener(cfg, &config_listener, this);
 		zwlr_output_configuration_v1_apply(cfg);
 		if (!client.roundtrip() || !resize_result_known || !resize_succeeded) {
-			WLOG_ERROR("screencast: ext: compositor rejected a %ux%u output resize, "
+			WLOG_ERROR("screencast: ext: compositor rejected a %ux%u@%u output mode, "
 					   "keeping its own output size",
-				config.width, config.height);
+				config.width, config.height, config.refresh_hz);
 			resize_unsupported = true;
 		} else {
-			WLOG_INFO("screencast: ext: resized the compositor's output to %ux%u", config.width,
-				config.height);
+			WLOG_INFO("screencast: ext: set the compositor's output to %ux%u@%u", config.width, config.height,
+				config.refresh_hz);
 		}
 		// The head has no destructor request; its proxy is freed client-side.
 		zwlr_output_configuration_head_v1_destroy(cfg_head);

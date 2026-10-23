@@ -57,6 +57,10 @@ public:
 		// display.client_scale), or 0 to leave the compositor's own. A
 		// backend that can't set one ignores it.
 		double scale = 0.0;
+		// The refresh rate to give the output, in whole Hz: the session's
+		// frame rate (SessionHost::output_refresh_hz()). A backend that
+		// can't set one ignores it.
+		uint32_t refresh_hz = 60;
 	};
 
 	// Establishes whatever the compositor needs before capture and input
@@ -89,7 +93,7 @@ public:
 	// For log lines: the compositor's name ("mutter", "kwin", ...).
 	virtual const char *name() const = 0;
 	// Whether open() makes the compositor's output Config's width x height
-	// (and scale) itself, so a new size needs only close() and open() again
+	// (and scale and refresh rate) itself, so a new size needs only close() and open() again
 	// against the same running compositor (ScreencastHost::request_resize()).
 	// A session that can't is never resized.
 	virtual bool sizes_output_on_open() const { return false; }

@@ -25,8 +25,9 @@ At 4K, 4:2:0:
   which is 4K60 on a GPU whose hardware encoder tops out near 24 fps.
 - **Bitrate.** Photos and games look fine from 0.5 bit/pixel, but dense
   text shows halos until about 1.0. So the ceiling is
-  `encode.pyrowave_bpp` (1.0) bits per output pixel at 60 fps, about
-  500 Mbit/s at 4K and 125 at 1080p, in place of `max_bitrate_mbps`
+  `encode.pyrowave_bpp` (1.0) bits per output pixel per frame at the
+  session's frame rate, about 500 Mbit/s at 4K60 and 125 at 1080p60
+  (2.4 times that at 144 Hz), in place of `max_bitrate_mbps`
   (`SessionServices::encode_bitrate_bps()`). Every frame is that large.
 - **Wire time.** A 1 MB frame needs about 8.5 ms on a 1 Gbit/s link
   however it is paced, so on 1G it pays off at 1080p and 1440p; 4K wants

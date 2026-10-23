@@ -101,6 +101,7 @@ prints this list with no arguments; the logic of each is in
 | `-T` | Take over: if the user's session is attached to another client, disconnect that client and attach. Exit status 4 means a take-over was refused. |
 | `-r WxH` | Request this output resolution in `SessionHello`; the host's answer wins. |
 | `-s scale` | The remote desktop's scale, sent with `-r` and with every resolution change ([window size](../design/spectre-client.md#window-size)). `auto` (the default) is this desktop's own scale when the size asked for is this screen's in pixels, else 100%; a number (`1.5`) or percentage (`150%`), 50% to 400%, sets it whatever the size. spectre-qt's Remote desktop scale setting. |
+| `-H RATE` | The frame rate to ask the host for, in Hz: `60` (default), `120`, `144`, any rate from 30 to 240, or `auto` for this display's refresh rate. The host runs its desktop and encoder at it, up to its `encode.max_fps` ([wraith.toml](configuration.md#wraithtoml)), and reports what it set. More frames cost the host's encoder and the link proportionally more. spectre-qt's Frame rate setting. |
 | `-A` | Make the remote resolution follow the window. |
 | `-V fit\|actual` | Picture scaled to the window, or 1:1 and panned. Default: whichever the menu last picked. |
 | `-c SCALE` | Extra cursor size multiplier (default 1). |

@@ -295,13 +295,17 @@ void SessionClient::on_connected() {
 	} else if (network_profile_ == "mobile") {
 		hello->set_network_profile(gdp::session::NETWORK_PROFILE_MOBILE);
 	}
-	if (requested_width_ > 0 && requested_height_ > 0) {
+	bool sized = requested_width_ > 0 && requested_height_ > 0;
+	if (sized || requested_refresh_mhz_ > 0) {
 		auto *display = hello->add_displays();
-		display->set_width(requested_width_);
-		display->set_height(requested_height_);
-		if (requested_scale_ > 0.0) {
-			display->set_scale(requested_scale_);
+		if (sized) {
+			display->set_width(requested_width_);
+			display->set_height(requested_height_);
+			if (requested_scale_ > 0.0) {
+				display->set_scale(requested_scale_);
+			}
 		}
+		display->set_refresh_mhz(requested_refresh_mhz_);
 	}
 	send_control(hello_env);
 

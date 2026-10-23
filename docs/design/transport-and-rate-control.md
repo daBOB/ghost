@@ -100,11 +100,14 @@ refinement's layer is repaired separately and at once
 A keyframe request also has the host re-encode the current picture,
 since a still desktop produces no next frame to carry it.
 
-The periodic keyframe (`encode.gop`) defaults to every 600 frames (10 s
-at 60 fps). With every loss repaired on its own, it only bounds damage a
-repair missed, and on a slow link each keyframe is a burst. H.264, H.265
-and AV1 streams with a 600-frame GOP decode without error past their
-8-bit frame_num / POC / order-hint wrap.
+There is no periodic keyframe by default (`encode.gop` 0). With every
+loss repaired on its own, one would only bound damage a repair missed,
+and each is a hitch: on a slow link a burst, and at 4K a decode that
+stalls the client. A 4K 10-bit H.265 keyframe held spectre's Vulkan
+decoder for about 100 ms, a visible stutter every 4-5 s at 120-144 fps
+with the old 600-frame GOP. H.264, H.265 and AV1 streams decode without
+error past their 8-bit frame_num / POC / order-hint wrap, which a long or
+infinite GOP crosses every 256 frames.
 
 ## Congestion control
 

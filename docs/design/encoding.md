@@ -41,9 +41,9 @@ default codec, and reopens it for the codec a session negotiates, trying
 the client's preferences in order until one opens.
 
 Every backend codes one slice (one tile for AV1) per picture, with no
-B-frames, a single reference, and a key frame every `encode.gop` frames
-(0 for key frames only on request) or on request, so a session behaves
-the same whichever codec it negotiated.
+B-frames, a single reference, and key frames only on request (or every
+`encode.gop` frames, if that is set above its default of 0), so a
+session behaves the same whichever codec it negotiated.
 
 ## Colour
 
